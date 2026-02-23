@@ -22,6 +22,9 @@ dependencies:
     - aiomysql  # MySQL async driver
     - aiosqlite  # SQLite async driver
 
+    # Supabase
+    - supabase
+
     # Authentication & Security
     - python-jose[cryptography]  # JWT tokens
     - passlib[bcrypt]  # Password hashing
