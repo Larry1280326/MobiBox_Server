@@ -13,7 +13,7 @@ class DocumentItem(BaseModel):
     timestamp: Optional[datetime] = None
     volume: Optional[float] = None
     screen_on_ratio: Optional[float] = None
-    wifi_connected: Optional[str] = None
+    wifi_connected: Optional[bool] = None
     wifi_ssid: Optional[str] = None
     network_traffic: Optional[float] = None
     Rx_traffic: Optional[float] = None
