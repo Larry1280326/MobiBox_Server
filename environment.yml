@@ -1,0 +1,48 @@
+name: Mobibox_backend
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    # FastAPI core
+    - fastapi
+    - uvicorn[standard]
+
+    # Data validation and serialization
+    - pydantic
+    - pydantic-settings
+
+    # Database
+    - sqlalchemy
+    - alembic
+    - asyncpg  # PostgreSQL async driver
+    - psycopg2-binary  # PostgreSQL sync driver
+    - aiomysql  # MySQL async driver
+    - aiosqlite  # SQLite async driver
+
+    # Authentication & Security
+    - python-jose[cryptography]  # JWT tokens
+    - passlib[bcrypt]  # Password hashing
+    - python-multipart  # Form data parsing
+
+    # HTTP client
+    - httpx
+    - aiohttp
+
+    # Testing
+    - pytest
+    - pytest-asyncio
+    - httpx  # For testing FastAPI
+
+    # Utilities
+    - python-dotenv
+    - pyyaml
+    - orjson  # Fast JSON serialization
+
+    # Development tools
+    - black
+    - isort
+    - flake8
+    - mypy
