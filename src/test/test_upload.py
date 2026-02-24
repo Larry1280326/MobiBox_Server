@@ -10,7 +10,7 @@ class TestUploadDocuments:
         """Single document item is inserted successfully."""
         payload = {
             "items": [
-                {"user": "test_user", "volume": 0.8, "battery": 85.0},
+                {"user": "test_user", "volume": 80, "battery": 85},
             ]
         }
         response = client.post("/upload/documents", json=payload)
@@ -23,8 +23,8 @@ class TestUploadDocuments:
         """Multiple document items are bulk inserted."""
         payload = {
             "items": [
-                {"user": "user1", "volume": 0.8, "gpsLat": 37.77},
-                {"user": "user1", "battery": 90.0, "current_app": "com.example.app"},
+                {"user": "user1", "volume": 80, "gpsLat": 37.77},
+                {"user": "user1", "battery": 90, "current_app": "com.example.app"},
                 {"user": "user2", "screen_on_ratio": 0.5},
             ]
         }
@@ -57,7 +57,7 @@ class TestUploadDocuments:
 
     def test_upload_documents_missing_user_rejected(self, client: TestClient):
         """Item without required user field returns 422."""
-        payload = {"items": [{"volume": 0.8}]}
+        payload = {"items": [{"volume": 80}]}
         response = client.post("/upload/documents", json=payload)
         assert response.status_code == 422
 

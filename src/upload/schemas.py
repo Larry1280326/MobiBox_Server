@@ -1,7 +1,7 @@
 """Pydantic schemas for upload endpoints."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, Field
 
@@ -11,7 +11,7 @@ class DocumentItem(BaseModel):
 
     user: str
     timestamp: Optional[datetime] = None
-    volume: Optional[float] = None
+    volume: Optional[int] = None
     screen_on_ratio: Optional[float] = None
     wifi_connected: Optional[bool] = None
     wifi_ssid: Optional[str] = None
@@ -21,13 +21,13 @@ class DocumentItem(BaseModel):
     stepcount_sensor: Optional[int] = None
     gpsLat: Optional[float] = None
     gpsLon: Optional[float] = None
-    battery: Optional[float] = None
+    battery: Optional[int] = None
     current_app: Optional[str] = None
-    bluetooth_devices: Optional[str] = None
+    bluetooth_devices: Optional[List[str]] = None
     address: Optional[str] = None
-    poi: Optional[str] = None
+    poi: Optional[List[str]] = None
     nearbyBluetoothCount: Optional[int] = None
-    topBluetoothDevices: Optional[str] = None
+    topBluetoothDevices: Optional[List[str]] = None
 
 
 class DocumentUploadRequest(BaseModel):

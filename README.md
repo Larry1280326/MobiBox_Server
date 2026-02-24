@@ -127,9 +127,9 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
       {
         "user": "username",
         "timestamp": "2024-01-01T00:00:00Z",
-        "volume": 0.8,
+        "volume": 80,
         "screen_on_ratio": 0.5,
-        "wifi_connected": "Yes",
+        "wifi_connected": true,
         "wifi_ssid": "MyWiFi",
         "network_traffic": 1024.5,
         "Rx_traffic": 512.0,
@@ -137,13 +137,13 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
         "stepcount_sensor": 1500,
         "gpsLat": 37.7749,
         "gpsLon": -122.4194,
-        "battery": 85.0,
+        "battery": 85,
         "current_app": "com.example.app",
-        "bluetooth_devices": "device1,device2",
+        "bluetooth_devices": ["device1", "device2"],
         "address": "123 Main St",
-        "poi": "Coffee Shop",
+        "poi": ["Coffee Shop", "Restaurant"],
         "nearbyBluetoothCount": 3,
-        "topBluetoothDevices": "device1,device2,device3"
+        "topBluetoothDevices": ["device1", "device2", "device3"]
       }
     ]
   }
@@ -242,25 +242,25 @@ The application connects to Supabase and uses the following tables:
 - `name` (text, primary key) - Unique user identifier
 
 ### uploads table
-- `user` (text) - User identifier
-- `timestamp` (timestamptz) - Record timestamp
-- `volume` (float) - Audio volume level
-- `screen_on_ratio` (float) - Screen on time ratio
-- `wifi_connected` (text) - WiFi connection status
-- `wifi_ssid` (text) - WiFi network SSID
-- `network_traffic` (float) - Total network traffic
-- `Rx_traffic` (float) - Received traffic
-- `Tx_traffic` (float) - Transmitted traffic
-- `stepcount_sensor` (integer) - Step count
-- `gpsLat` (float) - GPS latitude
-- `gpsLon` (float) - GPS longitude
-- `battery` (float) - Battery percentage
-- `current_app` (text) - Current foreground app
-- `bluetooth_devices` (text) - Comma-separated Bluetooth devices
-- `address` (text) - Physical address
-- `poi` (text) - Point of interest
-- `nearbyBluetoothCount` (integer) - Nearby Bluetooth device count
-- `topBluetoothDevices` (text) - Top Bluetooth devices
+- `user` (character varying) - User identifier (foreign key to user.name)
+- `timestamp` (timestamp with time zone) - Record timestamp, defaults to now()
+- `volume` (smallint) - Audio volume level (0-100)
+- `screen_on_ratio` (real) - Screen on time ratio (0.0-1.0)
+- `wifi_connected` (boolean) - WiFi connection status
+- `wifi_ssid` (character varying) - WiFi network SSID
+- `network_traffic` (real) - Total network traffic in bytes
+- `Rx_traffic` (real) - Received traffic in bytes
+- `Tx_traffic` (real) - Transmitted traffic in bytes
+- `stepcount_sensor` (smallint) - Step count
+- `gpsLat` (double precision) - GPS latitude
+- `gpsLon` (double precision) - GPS longitude
+- `battery` (smallint) - Battery percentage (0-100)
+- `current_app` (character varying) - Current foreground app package name
+- `bluetooth_devices` (character varying[]) - Array of Bluetooth device names
+- `address` (character varying) - Physical address
+- `poi` (character varying[]) - Array of points of interest
+- `nearbyBluetoothCount` (smallint) - Count of nearby Bluetooth devices
+- `topBluetoothDevices` (character varying[]) - Array of top Bluetooth device names
 
 ### imu table
 - `user` (text) - User identifier
