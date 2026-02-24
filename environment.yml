@@ -44,6 +44,11 @@ dependencies:
     - pyyaml
     - orjson  # Fast JSON serialization
 
+    # LLM Integration
+    - langchain-openai
+    - langchain-core
+    - langchain-text-splitters
+
     # Development tools
     - black
     - isort
