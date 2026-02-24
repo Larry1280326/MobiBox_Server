@@ -37,6 +37,7 @@ dependencies:
     # Testing
     - pytest
     - pytest-asyncio
+    - pytest-mock
     - httpx  # For testing FastAPI
 
     # Utilities
@@ -54,3 +55,7 @@ dependencies:
     - isort
     - flake8
     - mypy
+
+    # Celery
+    - celery
+    - aio-pika

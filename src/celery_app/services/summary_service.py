@@ -1,0 +1,403 @@
+"""Business logic for generating interventions and summary logs.
+
+This module handles:
+- Compressing atomic activities into summaries
+- Generating health interventions via LLM
+- Creating daily/hourly summary logs
+"""
+
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from supabase import Client
+
+from src.database import get_supabase_client
+from src.llm_utils.services import query_llm, generate_structured_output
+from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Data Compression
+# ============================================================================
+
+
+async def compress_atomic_activities(
+    user: str,
+    hours: int = 1,
+    client: Client | None = None,
+) -> dict:
+    """
+    Compress atomic activities for a user over a time period.
+
+    Creates a summary of activities, counts, and patterns from raw atomic data.
+
+    Args:
+        user: User identifier
+        hours: Number of hours to look back
+        client: Optional Supabase client
+
+    Returns:
+        Compressed activity summary dict
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    # Fetch atomic activities
+    response = await asyncio.to_thread(
+        lambda: client.table("atomic_activities")
+        .select("*")
+        .eq("user", user)
+        .gte("timestamp", cutoff_time.isoformat())
+        .order("timestamp", desc=False)
+        .execute()
+    )
+
+    activities = response.data if response.data else []
+
+    if not activities:
+        return {
+            "user": user,
+            "period_hours": hours,
+            "total_records": 0,
+            "summary": {},
+        }
+
+    # Count occurrences of each label type
+    har_counts = {}
+    app_counts = {}
+    step_counts = {}
+    phone_counts = {}
+    social_counts = {}
+    movement_counts = {}
+    location_counts = {}
+
+    for activity in activities:
+        if activity.get("har_label"):
+            har_counts[activity["har_label"]] = har_counts.get(activity["har_label"], 0) + 1
+        if activity.get("app_category"):
+            app_counts[activity["app_category"]] = app_counts.get(activity["app_category"], 0) + 1
+        if activity.get("step_label"):
+            step_counts[activity["step_label"]] = step_counts.get(activity["step_label"], 0) + 1
+        if activity.get("phone_usage"):
+            phone_counts[activity["phone_usage"]] = phone_counts.get(activity["phone_usage"], 0) + 1
+        if activity.get("social_label"):
+            social_counts[activity["social_label"]] = social_counts.get(activity["social_label"], 0) + 1
+        if activity.get("movement_label"):
+            movement_counts[activity["movement_label"]] = movement_counts.get(activity["movement_label"], 0) + 1
+        if activity.get("location_label"):
+            location_counts[activity["location_label"]] = location_counts.get(activity["location_label"], 0) + 1
+
+    # Find dominant labels
+    def get_dominant(counts: dict) -> tuple[Optional[str], int]:
+        if not counts:
+            return None, 0
+        max_label = max(counts, key=counts.get)
+        return max_label, counts[max_label]
+
+    compressed = {
+        "user": user,
+        "period_hours": hours,
+        "total_records": len(activities),
+        "start_time": cutoff_time.isoformat(),
+        "end_time": datetime.now(timezone.utc).isoformat(),
+        "summary": {
+            "har": dict(sorted(har_counts.items(), key=lambda x: x[1], reverse=True)[:5]),
+            "app_usage": dict(sorted(app_counts.items(), key=lambda x: x[1], reverse=True)[:5]),
+            "step_activity": dict(sorted(step_counts.items(), key=lambda x: x[1], reverse=True)[:3]),
+            "phone_usage": dict(sorted(phone_counts.items(), key=lambda x: x[1], reverse=True)[:3]),
+            "social": dict(sorted(social_counts.items(), key=lambda x: x[1], reverse=True)[:3]),
+            "movement": dict(sorted(movement_counts.items(), key=lambda x: x[1], reverse=True)[:3]),
+            "location": dict(sorted(location_counts.items(), key=lambda x: x[1], reverse=True)[:3]),
+        },
+        "dominant": {
+            "activity": get_dominant(har_counts)[0],
+            "app_category": get_dominant(app_counts)[0],
+            "location": get_dominant(location_counts)[0],
+        },
+    }
+
+    return compressed
+
+
+async def get_all_users_with_activities(
+    hours: int = 1,
+    client: Client | None = None,
+) -> list[str]:
+    """
+    Get list of users who have atomic activities in the last X hours.
+
+    Args:
+        hours: Number of hours to look back
+        client: Optional Supabase client
+
+    Returns:
+        List of user identifiers
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    response = await asyncio.to_thread(
+        lambda: client.table("atomic_activities")
+        .select("user")
+        .gte("timestamp", cutoff_time.isoformat())
+        .execute()
+    )
+
+    if not response.data:
+        return []
+
+    # Extract unique users
+    users = list(set(item["user"] for item in response.data))
+    return users
+
+
+# ============================================================================
+# Intervention Generation
+# ============================================================================
+
+
+class InterventionOutput(BaseModel):
+    """Structured output for intervention generation."""
+    intervention_type: str
+    message: str
+    priority: str  # low, medium, high
+    category: str  # physical, mental, social, digital_wellbeing
+
+
+async def generate_intervention(
+    user: str,
+    compressed_data: dict,
+) -> Optional[dict]:
+    """
+    Generate a health intervention based on compressed activity data.
+
+    Uses LLM to analyze activity patterns and suggest interventions.
+
+    Args:
+        user: User identifier
+        compressed_data: Compressed activity summary
+
+    Returns:
+        Intervention dict with message and metadata
+    """
+    if not compressed_data.get("total_records"):
+        return None
+
+    summary = compressed_data.get("summary", {})
+    dominant = compressed_data.get("dominant", {})
+
+    system_prompt = """You are a health and wellness advisor. Analyze the user's activity patterns
+and suggest a helpful, personalized intervention. Consider:
+- Physical activity levels
+- Screen time and phone usage
+- Social interaction patterns
+- Location context
+- App usage patterns
+
+Generate a specific, actionable intervention that could help improve the user's wellbeing.
+The intervention should be encouraging and not judgmental.
+
+Return a JSON object with:
+- intervention_type: brief type (e.g., "movement_reminder", "screen_break", "social_encouragement")
+- message: a friendly, specific message (1-2 sentences)
+- priority: "low", "medium", or "high" based on urgency
+- category: "physical", "mental", "social", or "digital_wellbeing"
+"""
+
+    user_prompt = f"""User activity summary for the past {compressed_data.get('period_hours', 1)} hour(s):
+
+Activity patterns: {summary.get('har', {})}
+App usage: {summary.get('app_usage', {})}
+Phone usage: {summary.get('phone_usage', {})}
+Social context: {summary.get('social', {})}
+Movement: {summary.get('movement', {})}
+Location: {summary.get('location', {})}
+
+Dominant activity: {dominant.get('activity')}
+Dominant app category: {dominant.get('app_category')}
+Dominant location: {dominant.get('location')}
+
+Total activity records: {compressed_data.get('total_records')}
+
+Suggest an appropriate health intervention."""
+
+    try:
+        result = await generate_structured_output(
+            system_prompt,
+            user_prompt,
+            InterventionOutput,
+            temperature=0.3,
+        )
+
+        return {
+            "user": user,
+            "intervention_type": result.intervention_type,
+            "message": result.message,
+            "priority": result.priority,
+            "category": result.category,
+            "based_on_data": compressed_data.get("dominant", {}),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error generating intervention for user {user}: {e}")
+        # Fallback intervention
+        return {
+            "user": user,
+            "intervention_type": "general_wellbeing",
+            "message": "Take a moment to check in with yourself. How are you feeling?",
+            "priority": "low",
+            "category": "mental",
+            "based_on_data": {},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+async def insert_intervention(
+    intervention: dict,
+    client: Client | None = None,
+) -> dict:
+    """
+    Insert intervention into the database.
+
+    Args:
+        intervention: Intervention data to insert
+        client: Optional Supabase client
+
+    Returns:
+        Inserted record data
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    response = await asyncio.to_thread(
+        lambda: client.table("interventions").insert(intervention).execute()
+    )
+
+    return response.data[0] if response.data else {}
+
+
+# ============================================================================
+# Summary Log Generation
+# ============================================================================
+
+
+class SummaryOutput(BaseModel):
+    """Structured output for summary generation."""
+    title: str
+    summary: str
+    highlights: list[str]
+    recommendations: list[str]
+
+
+async def generate_summary(
+    user: str,
+    compressed_data: dict,
+    log_type: str = "hourly",
+) -> Optional[dict]:
+    """
+    Generate a summary log based on compressed activity data.
+
+    Uses LLM to create a readable summary of the user's activities.
+
+    Args:
+        user: User identifier
+        compressed_data: Compressed activity summary
+        log_type: Type of summary ("hourly" or "daily")
+
+    Returns:
+        Summary log dict
+    """
+    if not compressed_data.get("total_records"):
+        return None
+
+    summary = compressed_data.get("summary", {})
+    dominant = compressed_data.get("dominant", {})
+
+    period_desc = "hour" if log_type == "hourly" else "day"
+
+    system_prompt = f"""You are a lifestyle analyst. Create a concise, engaging summary
+of the user's activities over the past {period_desc}. Include:
+- A brief title summarizing the main theme
+- A 2-3 sentence narrative summary
+- 2-3 key highlights (interesting patterns or notable activities)
+- 1-2 gentle recommendations for improvement
+
+Return a JSON object with:
+- title: a catchy title (5-8 words)
+- summary: narrative description (2-3 sentences)
+- highlights: list of 2-3 notable points
+- recommendations: list of 1-2 suggestions
+"""
+
+    user_prompt = f"""User activity summary for the past {period_desc}:
+
+Activity patterns: {summary.get('har', {})}
+App usage: {summary.get('app_usage', {})}
+Phone usage: {summary.get('phone_usage', {})}
+Social context: {summary.get('social', {})}
+Movement: {summary.get('movement', {})}
+Location: {summary.get('location', {})}
+
+Dominant activity: {dominant.get('activity')}
+Dominant app category: {dominant.get('app_category')}
+Dominant location: {dominant.get('location')}
+
+Total activity records: {compressed_data.get('total_records')}
+
+Create a summary of this user's {period_desc}."""
+
+    try:
+        result = await generate_structured_output(
+            system_prompt,
+            user_prompt,
+            SummaryOutput,
+            temperature=0.4,
+        )
+
+        return {
+            "user": user,
+            "log_type": log_type,
+            "title": result.title,
+            "summary": result.summary,
+            "highlights": result.highlights,
+            "recommendations": result.recommendations,
+            "activity_counts": summary,
+            "dominant_activities": dominant,
+            "period_hours": compressed_data.get("period_hours", 1),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error generating summary for user {user}: {e}")
+        return None
+
+
+async def insert_summary_log(
+    summary_log: dict,
+    client: Client | None = None,
+) -> dict:
+    """
+    Insert summary log into the database.
+
+    Args:
+        summary_log: Summary log data to insert
+        client: Optional Supabase client
+
+    Returns:
+        Inserted record data
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    response = await asyncio.to_thread(
+        lambda: client.table("summary_logs").insert(summary_log).execute()
+    )
+
+    return response.data[0] if response.data else {}

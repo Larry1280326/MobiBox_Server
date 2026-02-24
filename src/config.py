@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_anon_key: str
 
+    # RabbitMQ / Celery
+    rabbitmq_url: str = "amqp://guest:guest@localhost:5672//"
+    celery_broker_url: str = "amqp://guest:guest@localhost:5672//"
+    celery_result_backend: str = "rpc://"
+
 
 class LLMSettings(BaseSettings):
     """LLM settings for Azure OpenAI integration."""
