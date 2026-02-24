@@ -16,8 +16,10 @@ from src.celery_app.services.atomic_service import (
 )
 from src.celery_app.services.summary_service import (
     compress_atomic_activities,
-    generate_intervention,
     generate_summary,
+)
+from src.celery_app.services.intervention_service import (
+    generate_intervention,
 )
 
 __all__ = [

@@ -21,12 +21,14 @@ from src.celery_app.services.atomic_service import (
 from src.celery_app.services.summary_service import (
     compress_atomic_activities,
     get_all_users_with_activities,
-    generate_intervention,
-    insert_intervention,
     generate_summary,
     insert_summary_log,
-    InterventionOutput,
     SummaryOutput,
+)
+from src.celery_app.services.intervention_service import (
+    generate_intervention,
+    insert_intervention,
+    InterventionOutput,
 )
 from src.celery_app.schemas.har_schemas import HARLabel
 from src.celery_app.schemas.atomic_schemas import AtomicActivity
@@ -70,13 +72,14 @@ class TestHarService:
     @pytest.mark.asyncio
     async def test_run_mock_har_model_moderate_acceleration(self):
         """Test mock HAR model with moderate acceleration (walking)."""
+        # Magnitude ~1.12 falls into the 0.5-2.0 range
         imu_data = [
-            {"acc_X": 1.0, "acc_Y": 0.5, "acc_Z": 10.0}
+            {"acc_X": 0.5, "acc_Y": 0.5, "acc_Z": 0.8}
         ]
         label, confidence = await run_mock_har_model(imu_data)
 
-        assert label in ["walking", "standing", "driving", "climbing_stairs", "cycling"]
-        assert 0.5 <= confidence <= 0.9
+        assert label in ["walking", "standing", "driving"]
+        assert 0.6 <= confidence <= 0.9
 
     @pytest.mark.asyncio
     async def test_run_mock_har_model_high_acceleration(self):
@@ -188,8 +191,9 @@ class TestAtomicService:
     @pytest.mark.asyncio
     async def test_generate_phone_usage_idle(self, mock_supabase_client):
         """Test phone usage label for idle state."""
+        # Low screen_on_ratio but no current_app leads to idle
         mock_supabase_client.table.return_value.select.return_value.eq.return_value.gte.return_value.order.return_value.execute.return_value.data = [
-            {"user": "test_user"},
+            {"user": "test_user", "screen_on_ratio": 0.1},
         ]
 
         result = await generate_phone_usage_label("test_user", window_seconds=10, client=mock_supabase_client)
@@ -324,7 +328,7 @@ class TestSummaryService:
             category="physical",
         )
 
-        with patch("src.celery_app.services.summary_service.generate_structured_output", new_callable=AsyncMock) as mock_llm:
+        with patch("src.celery_app.services.intervention_service.generate_structured_output", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = mock_intervention
 
             result = await generate_intervention("test_user", compressed_data)
@@ -347,7 +351,7 @@ class TestSummaryService:
             "dominant": {"activity": "sitting"},
         }
 
-        with patch("src.celery_app.services.summary_service.generate_structured_output", new_callable=AsyncMock) as mock_llm:
+        with patch("src.celery_app.services.intervention_service.generate_structured_output", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = Exception("LLM error")
 
             result = await generate_intervention("test_user", compressed_data)

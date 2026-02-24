@@ -16,10 +16,12 @@ from src.celery_app.celery_app import celery_app
 from src.celery_app.services.summary_service import (
     get_all_users_with_activities,
     compress_atomic_activities,
-    generate_intervention,
     generate_summary,
-    insert_intervention,
     insert_summary_log,
+)
+from src.celery_app.services.intervention_service import (
+    generate_intervention,
+    insert_intervention,
 )
 from src.database import get_supabase_client
 
