@@ -5,8 +5,9 @@ This module handles:
 - Inserting interventions into the database
 """
 
+import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from supabase import Client
@@ -26,29 +27,56 @@ class InterventionOutput(BaseModel):
     category: str  # physical, mental, social, digital_wellbeing
 
 
-async def generate_intervention(
+async def get_recent_summaries(
+    hours: int = 1,
+    client: Client | None = None,
+) -> list[dict]:
+    """
+    Get recent summary logs from the last X hours.
+
+    Args:
+        hours: Number of hours to look back
+        client: Optional Supabase client
+
+    Returns:
+        List of summary logs with user and summary data
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    response = await asyncio.to_thread(
+        lambda: client.table("summary_logs")
+        .select("*")
+        .gte("timestamp", cutoff_time.isoformat())
+        .order("timestamp", desc=False)
+        .execute()
+    )
+
+    return response.data if response.data else []
+
+
+async def generate_intervention_from_summary(
     user: str,
-    compressed_data: dict,
+    summary_log: dict,
 ) -> Optional[dict]:
     """
-    Generate a health intervention based on compressed activity data.
+    Generate a health intervention based on a summary log.
 
-    Uses LLM to analyze activity patterns and suggest interventions.
+    Uses LLM to analyze the summary and suggest personalized interventions.
 
     Args:
         user: User identifier
-        compressed_data: Compressed activity summary
+        summary_log: Summary log dict from summary_logs table
 
     Returns:
         Intervention dict with message and metadata
     """
-    if not compressed_data.get("total_records"):
+    if not summary_log:
         return None
 
-    summary = compressed_data.get("summary", {})
-    dominant = compressed_data.get("dominant", {})
-
-    system_prompt = """You are a health and wellness advisor. Analyze the user's activity patterns
+    system_prompt = """You are a health and wellness advisor. Analyze the user's activity summary
 and suggest a helpful, personalized intervention. Consider:
 - Physical activity levels
 - Screen time and phone usage
@@ -66,22 +94,23 @@ Return a JSON object with:
 - category: "physical", "mental", "social", or "digital_wellbeing"
 """
 
-    user_prompt = f"""User activity summary for the past {compressed_data.get('period_hours', 1)} hour(s):
+    user_prompt = f"""User activity summary:
 
-Activity patterns: {summary.get('har', {})}
-App usage: {summary.get('app_usage', {})}
-Phone usage: {summary.get('phone_usage', {})}
-Social context: {summary.get('social', {})}
-Movement: {summary.get('movement', {})}
-Location: {summary.get('location', {})}
+Title: {summary_log.get('title', 'No title')}
 
-Dominant activity: {dominant.get('activity')}
-Dominant app category: {dominant.get('app_category')}
-Dominant location: {dominant.get('location')}
+Summary: {summary_log.get('summary', 'No summary available')}
 
-Total activity records: {compressed_data.get('total_records')}
+Key Highlights: {summary_log.get('highlights', [])}
 
-Suggest an appropriate health intervention."""
+Dominant Activities: {summary_log.get('dominant_activities', {})}
+
+Activity Counts: {summary_log.get('activity_counts', {})}
+
+Recommendations from summary: {summary_log.get('recommendations', [])}
+
+Period: {summary_log.get('period_hours', 1)} hour(s)
+
+Suggest an appropriate health intervention based on this summary."""
 
     try:
         result = await generate_structured_output(
@@ -97,7 +126,7 @@ Suggest an appropriate health intervention."""
             "message": result.message,
             "priority": result.priority,
             "category": result.category,
-            "based_on_data": compressed_data.get("dominant", {}),
+            "based_on_data": summary_log.get("dominant_activities", {}),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:

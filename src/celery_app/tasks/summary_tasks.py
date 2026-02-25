@@ -1,14 +1,16 @@
 """Celery tasks for generating interventions and summary logs.
 
 Scheduled tasks:
-- generate_hourly_interventions: Runs every hour
-- generate_hourly_summary: Runs every hour
+- generate_hourly_summary: Runs every hour at minute 0
+- generate_hourly_interventions: Runs every hour at minute 5 (after summaries)
 - generate_daily_summary: Runs once daily at midnight
+
+Data flow:
+  atomic_activities -> summary_logs -> interventions
 """
 
 import asyncio
 import logging
-from typing import List
 
 from celery import shared_task
 
@@ -20,7 +22,8 @@ from src.celery_app.services.summary_service import (
     insert_summary_log,
 )
 from src.celery_app.services.intervention_service import (
-    generate_intervention,
+    generate_intervention_from_summary,
+    get_recent_summaries,
     insert_intervention,
 )
 from src.database import get_supabase_client
@@ -41,20 +44,19 @@ def _run_async(coro):
 @celery_app.task(name="generate_hourly_interventions")
 def generate_hourly_interventions() -> dict:
     """
-    Generate interventions for all users with recent activity.
+    Generate interventions based on recent summaries.
 
-    Runs every hour via Celery Beat.
-    Compresses the last hour of atomic activities and generates
-    personalized health interventions.
+    Runs every hour via Celery Beat (5 minutes after summary generation).
+    Reads from summary_logs table instead of atomic_activities.
     """
-    logger.info("Starting hourly intervention generation")
+    logger.info("Starting hourly intervention generation from summaries")
 
     async def process():
         client = get_supabase_client()
 
-        # Get users with activity in the last hour
-        users = await get_all_users_with_activities(hours=1, client=client)
-        logger.info(f"Found {len(users)} users with recent activity")
+        # Get recent summaries from the last hour
+        summaries = await get_recent_summaries(hours=1, client=client)
+        logger.info(f"Found {len(summaries)} recent summaries")
 
         results = {
             "processed": 0,
@@ -63,19 +65,20 @@ def generate_hourly_interventions() -> dict:
             "interventions": [],
         }
 
-        for user in users:
+        for summary in summaries:
+            user = summary.get("user")
+            if not user:
+                results["skipped"] += 1
+                continue
+
             try:
-                # Compress activities
-                compressed = await compress_atomic_activities(user, hours=1, client=client)
-
-                if not compressed.get("total_records"):
-                    results["skipped"] += 1
-                    continue
-
-                # Generate intervention
-                intervention = await generate_intervention(user, compressed)
+                # Generate intervention from summary
+                intervention = await generate_intervention_from_summary(user, summary)
 
                 if intervention:
+                    # Link intervention to source summary
+                    intervention["summary_id"] = summary.get("id")
+
                     # Insert to database
                     await insert_intervention(intervention, client)
                     results["processed"] += 1
@@ -83,6 +86,7 @@ def generate_hourly_interventions() -> dict:
                         "user": user,
                         "type": intervention.get("intervention_type"),
                         "priority": intervention.get("priority"),
+                        "summary_id": summary.get("id"),
                     })
                 else:
                     results["skipped"] += 1
@@ -217,12 +221,15 @@ def generate_daily_summary() -> dict:
 # Manual trigger tasks (for testing/admin use)
 
 @shared_task(name="trigger_intervention_for_user")
-def trigger_intervention_for_user(user: str) -> dict:
+def trigger_intervention_for_user(user: str, hours: int = 1) -> dict:
     """
     Manually trigger intervention generation for a specific user.
 
+    Generates intervention based on the most recent summary for the user.
+
     Args:
         user: User identifier
+        hours: Number of hours to look back for summaries (default: 1)
 
     Returns:
         Generated intervention data
@@ -230,12 +237,19 @@ def trigger_intervention_for_user(user: str) -> dict:
     async def process():
         client = get_supabase_client()
 
-        compressed = await compress_atomic_activities(user, hours=1, client=client)
-        if not compressed.get("total_records"):
-            return {"error": "No recent activity data for user"}
+        # Get recent summaries for this user
+        summaries = await get_recent_summaries(hours=hours, client=client)
+        user_summaries = [s for s in summaries if s.get("user") == user]
 
-        intervention = await generate_intervention(user, compressed)
+        if not user_summaries:
+            return {"error": "No recent summaries found for user"}
+
+        # Use the most recent summary
+        summary = user_summaries[-1] if user_summaries else None
+
+        intervention = await generate_intervention_from_summary(user, summary)
         if intervention:
+            intervention["summary_id"] = summary.get("id")
             await insert_intervention(intervention, client)
 
         return intervention or {}

@@ -132,23 +132,22 @@ async def generate_har_label(
     if not har_data:
         return None
 
-    # Extract labels with confidence
-    labels = [
-        f"{h.get('label', 'unknown')} (confidence: {h.get('confidence', 0.5):.2f})"
-        for h in har_data
-    ]
+    # Extract labels (DB column is har_label)
+    labels = [h.get("har_label", h.get("label", "unknown")) for h in har_data]
 
     if not labels:
         return None
 
+    labels_with_count = [f"{l} (count: {labels.count(l)})" for l in set(labels)]
+
     system_prompt = """You are an activity recognition expert.
 Analyze the provided HAR (Human Activity Recognition) labels and determine the most likely
-current activity. Consider the confidence scores when making your decision.
+current activity.
 
 Return only a single activity label, one of:
-- walking, running, sitting, standing, lying_down, climbing_stairs, descending_stairs, cycling, driving, unknown"""
+- unknown, standing, sitting, lying, walking, climbing stairs, running"""
 
-    user_prompt = f"Recent HAR labels:\n{chr(10).join(labels)}\n\nWhat is the most likely current activity?"
+    user_prompt = f"Recent HAR labels:\n{chr(10).join(labels_with_count)}\n\nWhat is the most likely current activity?"
 
     try:
         result = await query_llm(system_prompt, user_prompt, temperature=0.1)
@@ -157,7 +156,7 @@ Return only a single activity label, one of:
         logger.error(f"Error generating HAR label via LLM: {e}")
         # Fallback to most common label
         if har_data:
-            return har_data[0].get("label", "unknown")
+            return har_data[0].get("har_label", har_data[0].get("label", "unknown"))
         return None
 
 
@@ -192,19 +191,21 @@ async def generate_app_category(
         return None
 
     system_prompt = """You are an app usage analyst. Categorize the user's current app usage into one of these categories:
-- social_media (Facebook, Instagram, Twitter, WhatsApp, etc.)
-- communication (Messenger, Telegram, Discord, etc.)
-- productivity (Email, Calendar, Notes, Office apps, etc.)
-- entertainment (YouTube, Netflix, Games, etc.)
-- news (News apps, RSS readers, etc.)
-- shopping (Amazon, eBay, food delivery, etc.)
-- health_fitness (Fitness trackers, health apps, etc.)
-- navigation (Maps, GPS apps, etc.)
-- finance (Banking, payment apps, etc.)
-- education (Learning apps, courses, etc.)
-- other
+- social communication app (Facebook, Instagram, WhatsApp, etc.)
+- common life app (daily utilities)
+- office/working app (Email, Calendar, Office apps, etc.)
+- learning and education app (courses, learning apps)
+- e-commerce/shopping platform (Amazon, eBay, food delivery)
+- news/reading app (News apps, RSS readers)
+- video and music app (YouTube, Netflix, Spotify)
+- health management/self-discipline app (Fitness trackers, health apps)
+- financial services app (Banking, payment apps)
+- comprehensive entertainment app (Games, entertainment)
+- games or gaming platform
+- tool/engineering/functional app (Maps, GPS, utilities)
+- uncertain
 
-Return only the category name."""
+Return only the category name exactly as listed above."""
 
     user_prompt = f"Current apps used:\n{chr(10).join(apps[-10:])}\n\nWhat category best describes this usage?"
 
@@ -301,7 +302,9 @@ async def generate_step_label(
     client: Client | None = None,
 ) -> Optional[str]:
     """
-    Generate step activity label using if-else rules.
+    Generate step activity label using delta-based logic.
+
+    Calculates the number of steps gained within the time window.
 
     Args:
         user: User identifier
@@ -312,37 +315,26 @@ async def generate_step_label(
         Step label string or None
     """
     doc_data = await get_document_window(user, window_seconds, client)
-
     if not doc_data:
         return None
 
-    # Get step count data
     step_counts = [doc.get("stepcount_sensor") for doc in doc_data if doc.get("stepcount_sensor") is not None]
-
-    if not step_counts:
+    if len(step_counts) < 2:
         return None
 
-    # Calculate step change (if we have multiple readings)
-    if len(step_counts) >= 2:
-        step_change = step_counts[-1] - step_counts[0]
+    # Calculate delta (steps gained in interval)
+    total_steps_in_interval = step_counts[-1] - step_counts[0]
 
-        if step_change > 100:
-            return "high_activity"
-        elif step_change > 20:
-            return "moderate_activity"
-        elif step_change > 0:
-            return "low_activity"
-        else:
-            return "stationary"
-
-    # Single reading - classify by absolute value
-    avg_steps = sum(step_counts) / len(step_counts)
-    if avg_steps > 5000:
-        return "active"
-    elif avg_steps > 1000:
-        return "moderate"
+    if total_steps_in_interval <= 3:
+        return "almost stationary"
+    elif total_steps_in_interval <= 10:
+        return "low"
+    elif total_steps_in_interval <= 18:
+        return "medium"
+    elif total_steps_in_interval <= 25:
+        return "high"
     else:
-        return "sedentary"
+        return "very high"
 
 
 async def generate_phone_usage_label(
@@ -351,7 +343,7 @@ async def generate_phone_usage_label(
     client: Client | None = None,
 ) -> Optional[str]:
     """
-    Generate phone usage label using if-else rules.
+    Generate phone usage label using screen ratio and network traffic.
 
     Args:
         user: User identifier
@@ -362,31 +354,28 @@ async def generate_phone_usage_label(
         Phone usage label string or None
     """
     doc_data = await get_document_window(user, window_seconds, client)
-
     if not doc_data:
         return None
 
-    # Get screen-on ratio and current app
     screen_ratios = [doc.get("screen_on_ratio") for doc in doc_data if doc.get("screen_on_ratio") is not None]
-    apps = [doc.get("current_app") for doc in doc_data if doc.get("current_app")]
+    traffic_values = [doc.get("network_traffic") for doc in doc_data if doc.get("network_traffic") is not None]
 
-    if not screen_ratios and not apps:
+    if not screen_ratios:
         return None
 
-    avg_screen_ratio = sum(screen_ratios) / len(screen_ratios) if screen_ratios else 0
+    avg_screen_ratio = sum(screen_ratios) / len(screen_ratios)
+    total_traffic = sum(traffic_values) if traffic_values else 0
 
-    # Classification logic
-    if avg_screen_ratio > 0.8:
-        return "heavy_usage"
-    elif avg_screen_ratio > 0.5:
-        return "moderate_usage"
-    elif avg_screen_ratio > 0.2:
-        return "light_usage"
-    elif apps:
-        # Has app data but low screen time - brief interactions
-        return "intermittent_usage"
-    else:
+    if avg_screen_ratio < 0.2 and total_traffic < 1 * 1024:  # < 1KB
         return "idle"
+    elif avg_screen_ratio < 0.5 and total_traffic < 10 * 1024:  # < 10KB
+        return "low"
+    elif avg_screen_ratio < 0.8 and total_traffic < 50 * 1024:  # < 50KB
+        return "medium"
+    elif avg_screen_ratio >= 0.8 or total_traffic >= 100 * 1024:  # High screen OR high traffic
+        return "very high"
+    else:
+        return "high"
 
 
 async def generate_social_label(
@@ -395,7 +384,9 @@ async def generate_social_label(
     client: Client | None = None,
 ) -> Optional[str]:
     """
-    Generate social context label using if-else rules.
+    Generate social context label using hybrid Bluetooth and app detection.
+
+    Incorporates paired/unknown bluetooth device ratio for better social context.
 
     Args:
         user: User identifier
@@ -410,39 +401,54 @@ async def generate_social_label(
     if not doc_data:
         return None
 
-    # Get Bluetooth and app data for social context
+    # Get Bluetooth data
+    bt_devices_list = [doc.get("bluetooth_devices") for doc in doc_data if doc.get("bluetooth_devices")]
     bt_counts = [doc.get("nearbyBluetoothCount") for doc in doc_data if doc.get("nearbyBluetoothCount") is not None]
     apps = [doc.get("current_app", "").lower() for doc in doc_data if doc.get("current_app")]
 
-    # Social app detection
-    social_apps = {"whatsapp", "facebook", "instagram", "telegram", "discord", "messenger", "twitter", "tiktok", "snapchat"}
-    using_social_app = any(app in social_apps for app in apps)
+    # Calculate paired/unknown ratio
+    total_paired = 0
+    total_unknown = 0
+    for bt_devices in bt_devices_list:
+        if isinstance(bt_devices, list):
+            for device in bt_devices:
+                if isinstance(device, dict):
+                    if device.get("paired"):
+                        total_paired += 1
+                    else:
+                        total_unknown += 1
 
-    # Communication app detection
+    paired_ratio = total_paired / (total_paired + total_unknown) if (total_paired + total_unknown) > 0 else 0
+
+    # App detection (existing logic)
+    social_apps = {"whatsapp", "facebook", "instagram", "telegram", "discord", "messenger", "twitter", "tiktok", "snapchat"}
     comm_apps = {"whatsapp", "telegram", "discord", "messenger", "signal", "wechat"}
+    using_social_app = any(app in social_apps for app in apps)
     using_comm_app = any(app in comm_apps for app in apps)
 
-    # Bluetooth-based social detection
     avg_bt_count = sum(bt_counts) / len(bt_counts) if bt_counts else 0
 
+    # Hybrid classification (returns DB enum values)
     if using_comm_app:
-        if avg_bt_count > 3:
-            return "group_communication"
+        if paired_ratio > 0.5:
+            return "in group/public space"
         else:
-            return "direct_communication"
+            return "with someone"
     elif using_social_app:
         if avg_bt_count > 5:
-            return "social_gathering"
+            return "in group/public space"
         else:
-            return "social_media_browsing"
+            return "alone"
+    elif paired_ratio > 0.7:
+        return "with someone"
     elif avg_bt_count > 10:
-        return "crowded_environment"
+        return "in group/public space"
     elif avg_bt_count > 3:
-        return "small_group"
+        return "with someone"
     elif avg_bt_count > 0:
-        return "few_people_nearby"
+        return "alone or with someone"
     else:
-        return "solitary"
+        return "alone"
 
 
 async def generate_movement_label(
@@ -451,9 +457,9 @@ async def generate_movement_label(
     client: Client | None = None,
 ) -> Optional[str]:
     """
-    Generate movement pattern label using if-else rules.
+    Generate movement pattern label using distance-based logic.
 
-    Uses GPS coordinates to detect movement patterns over a longer window.
+    Uses GPS coordinates to calculate total distance traveled and classifies movement.
 
     Args:
         user: User identifier
@@ -466,37 +472,26 @@ async def generate_movement_label(
     import math
 
     doc_data = await get_document_window(user, window_seconds, client)
-
     if not doc_data:
         return None
 
-    # Extract GPS coordinates with timestamps
+    # Extract GPS coordinates
     gps_points = []
     for doc in doc_data:
         if doc.get("gpsLat") and doc.get("gpsLon"):
-            gps_points.append({
-                "lat": doc["gpsLat"],
-                "lon": doc["gpsLon"],
-                "timestamp": doc.get("timestamp"),
-            })
+            gps_points.append({"lat": doc["gpsLat"], "lon": doc["gpsLon"]})
 
     if len(gps_points) < 2:
         return None
 
-    # Calculate distance between first and last point
+    # Haversine formula for distance
     def haversine(lat1, lon1, lat2, lon2):
-        """Calculate distance between two GPS points in meters."""
         R = 6371000  # Earth radius in meters
-        phi1 = math.radians(lat1)
-        phi2 = math.radians(lat2)
+        phi1, phi2 = math.radians(lat1), math.radians(lat2)
         delta_phi = math.radians(lat2 - lat1)
         delta_lambda = math.radians(lon2 - lon1)
-
-        a = math.sin(delta_phi / 2) ** 2 + \
-            math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-        return R * c
+        a = math.sin(delta_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     # Calculate total distance
     total_distance = 0
@@ -506,21 +501,15 @@ async def generate_movement_label(
             gps_points[i]["lat"], gps_points[i]["lon"]
         )
 
-    # Calculate speed (m/s) - approximate
-    time_diff = window_seconds
-    speed = total_distance / time_diff if time_diff > 0 else 0
-
-    # Classification based on speed
-    if speed > 8:  # ~30 km/h
-        return "vehicle_travel"
-    elif speed > 3:  # ~10 km/h
-        return "cycling"
-    elif speed > 1.5:  # ~5 km/h
-        return "walking"
-    elif speed > 0.5:
-        return "slow_movement"
-    else:
+    # Distance-based classification
+    if total_distance < 15:
         return "stationary"
+    elif total_distance < 55:
+        return "slow"
+    elif total_distance < 115:
+        return "medium"
+    else:
+        return "fast"
 
 
 # ============================================================================
@@ -594,8 +583,19 @@ async def insert_atomic_activity(
     if client is None:
         client = get_supabase_client()
 
-    data = activity.model_dump()
-    data["timestamp"] = data["timestamp"].isoformat()
+    # Map model fields to DB columns and enum values
+    raw = activity.model_dump()
+    data = {
+        "user": raw["user"],
+        "timestamp": raw["timestamp"].isoformat(),
+        "har_label": raw["har_label"] or "unknown",
+        "app_category": raw["app_category"] or "uncertain",
+        "step_count": raw["step_label"] or "almost stationary",
+        "phone_usage": raw["phone_usage"] or "idle",
+        "social": raw["social_label"] or "alone",
+        "movement": raw["movement_label"] or "stationary",
+        "location": raw["location_label"],
+    }
 
     response = await asyncio.to_thread(
         lambda: client.table("atomic_activities").insert(data).execute()

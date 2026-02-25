@@ -5,6 +5,7 @@ from src.config import get_settings
 from src.database import get_supabase_client
 from src.register import router as register_router
 from src.upload import router as upload_router
+from src.query import router as query_router
 
 settings = get_settings()
 
@@ -26,6 +27,7 @@ app.add_middleware(
 # Include routers
 app.include_router(register_router)
 app.include_router(upload_router)
+app.include_router(query_router)
 
 
 @app.get("/health")

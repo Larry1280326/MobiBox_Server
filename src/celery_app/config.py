@@ -1,6 +1,5 @@
 """Celery-specific configuration."""
 
-from datetime import timedelta
 from celery.schedules import crontab
 
 
@@ -24,13 +23,17 @@ ATOMIC_DEBOUNCE_SECONDS = 5  # Minimum time between atomic processing per user
 
 # Beat schedule
 CELERY_BEAT_SCHEDULE = {
-    "hourly-interventions": {
-        "task": "src.celery_app.tasks.summary_tasks.generate_hourly_interventions",
-        "schedule": crontab(minute=0),  # Every hour at minute 0
+    "har-periodic": {
+        "task": "src.celery_app.tasks.har_tasks.process_har_periodic",
+        "schedule": 2.0,  # Every 2 seconds
     },
     "hourly-summary": {
         "task": "src.celery_app.tasks.summary_tasks.generate_hourly_summary",
         "schedule": crontab(minute=0),  # Every hour at minute 0
+    },
+    "hourly-interventions": {
+        "task": "src.celery_app.tasks.summary_tasks.generate_hourly_interventions",
+        "schedule": crontab(minute=5),  # 5 minutes after summary
     },
     "daily-summary": {
         "task": "src.celery_app.tasks.summary_tasks.generate_daily_summary",

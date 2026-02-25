@@ -19,7 +19,9 @@ from src.celery_app.services.summary_service import (
     generate_summary,
 )
 from src.celery_app.services.intervention_service import (
-    generate_intervention,
+    generate_intervention_from_summary,
+    get_recent_summaries,
+    insert_intervention,
 )
 
 __all__ = [
@@ -34,6 +36,8 @@ __all__ = [
     "generate_movement_label",
     "generate_location_label",
     "compress_atomic_activities",
-    "generate_intervention",
+    "generate_intervention_from_summary",
+    "get_recent_summaries",
+    "insert_intervention",
     "generate_summary",
 ]

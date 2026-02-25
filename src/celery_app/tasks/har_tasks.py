@@ -111,3 +111,76 @@ def process_har_single(user: str) -> dict:
         Processing result
     """
     return process_har_batch.delay([user])
+
+
+@celery_app.task(bind=True, rate_limit=HAR_TASK_RATE_LIMIT, name="process_har_periodic")
+def process_har_periodic(self) -> dict:
+    """
+    Periodic task to process HAR for all active users.
+
+    This task runs every 2 seconds (configured in beat schedule) and processes
+    HAR for users that have recent IMU data and haven't been processed recently.
+
+    Returns:
+        Summary of processing results
+    """
+    logger.info("Running periodic HAR processing")
+
+    client = get_supabase_client()
+    results = {
+        "processed": 0,
+        "skipped": 0,
+        "errors": 0,
+        "labels": [],
+    }
+
+    async def process_active_users():
+        import time
+        from datetime import datetime, timedelta, timezone
+
+        # Get users with recent IMU data (last 10 seconds)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=10)
+
+        response = await asyncio.to_thread(
+            lambda: client.table("imu")
+            .select("user")
+            .gte("timestamp", cutoff_time.isoformat())
+            .execute()
+        )
+
+        if not response.data:
+            logger.debug("No users with recent IMU data")
+            return
+
+        # Get unique users
+        users = list(set(item["user"] for item in response.data))
+        logger.info(f"Found {len(users)} users with recent IMU data")
+
+        for user in users:
+            # Check debounce
+            if not _should_process_user(user):
+                logger.debug(f"Skipping user {user} due to debounce")
+                results["skipped"] += 1
+                continue
+
+            try:
+                result = await process_har_for_user(user, client)
+                if result:
+                    results["processed"] += 1
+                    results["labels"].append({
+                        "user": user,
+                        "label": result.label,
+                        "confidence": result.confidence,
+                    })
+                    _mark_user_processed(user)
+                else:
+                    results["skipped"] += 1
+                    logger.debug(f"No IMU data for user {user}")
+            except Exception as e:
+                logger.error(f"Error processing HAR for user {user}: {e}")
+                results["errors"] += 1
+
+    _run_async(process_active_users())
+
+    logger.info(f"Periodic HAR complete: {results}")
+    return results

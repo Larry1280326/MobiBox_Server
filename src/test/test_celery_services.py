@@ -26,7 +26,8 @@ from src.celery_app.services.summary_service import (
     SummaryOutput,
 )
 from src.celery_app.services.intervention_service import (
-    generate_intervention,
+    get_recent_summaries,
+    generate_intervention_from_summary,
     insert_intervention,
     InterventionOutput,
 )
@@ -66,7 +67,7 @@ class TestHarService:
         ]
         label, confidence = await run_mock_har_model(imu_data)
 
-        assert label in ["sitting", "lying_down", "standing"]
+        assert label in ["sitting", "lying", "standing"]
         assert 0.7 <= confidence <= 0.9
 
     @pytest.mark.asyncio
@@ -78,7 +79,7 @@ class TestHarService:
         ]
         label, confidence = await run_mock_har_model(imu_data)
 
-        assert label in ["walking", "standing", "driving"]
+        assert label in ["walking", "standing", "sitting"]
         assert 0.6 <= confidence <= 0.9
 
     @pytest.mark.asyncio
@@ -89,19 +90,19 @@ class TestHarService:
         ]
         label, confidence = await run_mock_har_model(imu_data)
 
-        assert label in ["running", "climbing_stairs", "descending_stairs"]
+        assert label in ["running", "climbing stairs"]
         assert 0.6 <= confidence <= 0.9
 
     @pytest.mark.asyncio
     async def test_insert_har_label(self, mock_supabase_client):
         """Test inserting HAR label to database."""
         mock_supabase_client.table.return_value.insert.return_value.execute.return_value.data = [
-            {"id": 1, "user": "test_user", "label": "walking", "confidence": 0.8}
+            {"id": 1, "user": "test_user", "har_label": "walking"}
         ]
 
         result = await insert_har_label("test_user", "walking", 0.8, client=mock_supabase_client)
 
-        assert result["label"] == "walking"
+        assert result["har_label"] == "walking"
         mock_supabase_client.table.assert_called_with("har")
 
     @pytest.mark.asyncio
@@ -151,7 +152,7 @@ class TestAtomicService:
 
         result = await generate_step_label("test_user", window_seconds=10, client=mock_supabase_client)
 
-        assert result == "stationary"
+        assert result == "almost stationary"
 
     @pytest.mark.asyncio
     async def test_generate_step_label_low_activity(self, mock_supabase_client):
@@ -163,19 +164,19 @@ class TestAtomicService:
 
         result = await generate_step_label("test_user", window_seconds=10, client=mock_supabase_client)
 
-        assert result == "low_activity"
+        assert result == "low"
 
     @pytest.mark.asyncio
     async def test_generate_step_label_high_activity(self, mock_supabase_client):
         """Test step label generation for high activity."""
         mock_supabase_client.table.return_value.select.return_value.eq.return_value.gte.return_value.order.return_value.execute.return_value.data = [
             {"user": "test_user", "stepcount_sensor": 1000},
-            {"user": "test_user", "stepcount_sensor": 1200},
+            {"user": "test_user", "stepcount_sensor": 1020},  # 20 steps in 10s = "high"
         ]
 
         result = await generate_step_label("test_user", window_seconds=10, client=mock_supabase_client)
 
-        assert result == "high_activity"
+        assert result == "high"
 
     @pytest.mark.asyncio
     async def test_generate_phone_usage_heavy(self, mock_supabase_client):
@@ -186,7 +187,7 @@ class TestAtomicService:
 
         result = await generate_phone_usage_label("test_user", window_seconds=10, client=mock_supabase_client)
 
-        assert result == "heavy_usage"
+        assert result == "very high"
 
     @pytest.mark.asyncio
     async def test_generate_phone_usage_idle(self, mock_supabase_client):
@@ -209,7 +210,7 @@ class TestAtomicService:
 
         result = await generate_social_label("test_user", window_seconds=10, client=mock_supabase_client)
 
-        assert result == "solitary"
+        assert result == "alone"
 
     @pytest.mark.asyncio
     async def test_generate_social_label_communication(self, mock_supabase_client):
@@ -220,7 +221,7 @@ class TestAtomicService:
 
         result = await generate_social_label("test_user", window_seconds=10, client=mock_supabase_client)
 
-        assert result == "direct_communication"
+        assert result == "with someone"
 
     @pytest.mark.asyncio
     async def test_generate_movement_label_stationary(self, mock_supabase_client):
@@ -245,8 +246,8 @@ class TestAtomicService:
 
         result = await generate_movement_label("test_user", window_seconds=120, client=mock_supabase_client)
 
-        # Could be walking or stationary depending on distance calculation
-        assert result in ["stationary", "slow_movement", "walking"]
+        # Could be stationary or slow depending on distance calculation
+        assert result in ["stationary", "slow", "medium", "fast"]
 
 
 class TestSummaryService:
@@ -295,30 +296,69 @@ class TestSummaryService:
         assert "user2" in result
 
     @pytest.mark.asyncio
-    async def test_generate_intervention_no_data(self):
-        """Test intervention generation with no activity data."""
-        compressed_data = {"total_records": 0, "summary": {}, "dominant": {}}
+    async def test_get_recent_summaries(self, mock_supabase_client):
+        """Test fetching recent summaries."""
+        mock_supabase_client.table.return_value.select.return_value.gte.return_value.order.return_value.execute.return_value.data = [
+            {
+                "id": "summary-1",
+                "user": "test_user",
+                "log_type": "hourly",
+                "title": "Active Hour",
+                "summary": "You had an active hour.",
+                "highlights": ["Good walking"],
+                "recommendations": ["Keep it up"],
+                "dominant_activities": {"activity": "walking"},
+            }
+        ]
 
-        result = await generate_intervention("test_user", compressed_data)
+        result = await get_recent_summaries(hours=1, client=mock_supabase_client)
+
+        assert len(result) == 1
+        assert result[0]["user"] == "test_user"
+        mock_supabase_client.table.assert_called_with("summary_logs")
+
+    @pytest.mark.asyncio
+    async def test_get_recent_summaries_empty(self, mock_supabase_client):
+        """Test fetching recent summaries when none exist."""
+        mock_supabase_client.table.return_value.select.return_value.gte.return_value.order.return_value.execute.return_value.data = []
+
+        result = await get_recent_summaries(hours=1, client=mock_supabase_client)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_generate_intervention_from_summary_empty(self):
+        """Test intervention generation with empty summary."""
+        result = await generate_intervention_from_summary("test_user", {})
 
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_generate_intervention_success(self):
-        """Test successful intervention generation."""
-        compressed_data = {
-            "total_records": 10,
-            "period_hours": 1,
-            "summary": {
-                "har": {"sitting": 8, "walking": 2},
-                "app_usage": {"social_media": 5, "productivity": 3},
-                "phone_usage": {"heavy_usage": 7},
-            },
-            "dominant": {
+    async def test_generate_intervention_from_summary_none(self):
+        """Test intervention generation with None summary."""
+        result = await generate_intervention_from_summary("test_user", None)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_generate_intervention_from_summary_success(self):
+        """Test successful intervention generation from summary."""
+        summary_log = {
+            "id": "summary-1",
+            "user": "test_user",
+            "title": "Sedentary Hour",
+            "summary": "You were mostly sitting during this hour.",
+            "highlights": ["45 minutes sitting", "Some productivity app usage"],
+            "recommendations": ["Try to move more"],
+            "dominant_activities": {
                 "activity": "sitting",
-                "app_category": "social_media",
-                "location": "home",
+                "app_category": "productivity",
+                "location": "work",
             },
+            "activity_counts": {
+                "har": {"sitting": 45, "walking": 15},
+            },
+            "period_hours": 1,
         }
 
         mock_intervention = InterventionOutput(
@@ -331,7 +371,7 @@ class TestSummaryService:
         with patch("src.celery_app.services.intervention_service.generate_structured_output", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = mock_intervention
 
-            result = await generate_intervention("test_user", compressed_data)
+            result = await generate_intervention_from_summary("test_user", summary_log)
 
         assert result is not None
         assert result["user"] == "test_user"
@@ -339,22 +379,28 @@ class TestSummaryService:
         assert result["priority"] == "medium"
         assert result["category"] == "physical"
         assert "timestamp" in result
+        assert result["based_on_data"] == summary_log["dominant_activities"]
         mock_llm.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_generate_intervention_fallback_on_error(self):
+    async def test_generate_intervention_from_summary_fallback(self):
         """Test intervention generation falls back on LLM error."""
-        compressed_data = {
-            "total_records": 10,
+        summary_log = {
+            "id": "summary-1",
+            "user": "test_user",
+            "title": "Active Hour",
+            "summary": "Good activity this hour.",
+            "highlights": ["Good walking"],
+            "recommendations": ["Keep it up"],
+            "dominant_activities": {"activity": "walking"},
+            "activity_counts": {"har": {"walking": 30}},
             "period_hours": 1,
-            "summary": {"har": {"sitting": 10}},
-            "dominant": {"activity": "sitting"},
         }
 
         with patch("src.celery_app.services.intervention_service.generate_structured_output", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = Exception("LLM error")
 
-            result = await generate_intervention("test_user", compressed_data)
+            result = await generate_intervention_from_summary("test_user", summary_log)
 
         assert result is not None
         assert result["intervention_type"] == "general_wellbeing"
@@ -370,6 +416,7 @@ class TestSummaryService:
             "message": "Take a walk!",
             "priority": "medium",
             "category": "physical",
+            "summary_id": "summary-uuid-1",
         }
 
         mock_supabase_client.table.return_value.insert.return_value.execute.return_value.data = [
@@ -381,6 +428,7 @@ class TestSummaryService:
         assert result["id"] == 1
         assert result["user"] == "test_user"
         assert result["intervention_type"] == "movement_reminder"
+        assert result["summary_id"] == "summary-uuid-1"
         mock_supabase_client.table.assert_called_with("interventions")
 
     @pytest.mark.asyncio

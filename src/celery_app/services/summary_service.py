@@ -76,21 +76,26 @@ async def compress_atomic_activities(
     movement_counts = {}
     location_counts = {}
 
+    # DB columns: har_label, app_category, step_count, phone_usage, social, movement, location
     for activity in activities:
         if activity.get("har_label"):
             har_counts[activity["har_label"]] = har_counts.get(activity["har_label"], 0) + 1
         if activity.get("app_category"):
             app_counts[activity["app_category"]] = app_counts.get(activity["app_category"], 0) + 1
-        if activity.get("step_label"):
-            step_counts[activity["step_label"]] = step_counts.get(activity["step_label"], 0) + 1
+        step_val = activity.get("step_count") or activity.get("step_label")
+        if step_val:
+            step_counts[step_val] = step_counts.get(step_val, 0) + 1
         if activity.get("phone_usage"):
             phone_counts[activity["phone_usage"]] = phone_counts.get(activity["phone_usage"], 0) + 1
-        if activity.get("social_label"):
-            social_counts[activity["social_label"]] = social_counts.get(activity["social_label"], 0) + 1
-        if activity.get("movement_label"):
-            movement_counts[activity["movement_label"]] = movement_counts.get(activity["movement_label"], 0) + 1
-        if activity.get("location_label"):
-            location_counts[activity["location_label"]] = location_counts.get(activity["location_label"], 0) + 1
+        social_val = activity.get("social") or activity.get("social_label")
+        if social_val:
+            social_counts[social_val] = social_counts.get(social_val, 0) + 1
+        movement_val = activity.get("movement") or activity.get("movement_label")
+        if movement_val:
+            movement_counts[movement_val] = movement_counts.get(movement_val, 0) + 1
+        location_val = activity.get("location") or activity.get("location_label")
+        if location_val:
+            location_counts[location_val] = location_counts.get(location_val, 0) + 1
 
     # Find dominant labels
     def get_dominant(counts: dict) -> tuple[Optional[str], int]:

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: str
     supabase_anon_key: str
+    supabase_service_role_key: str = ""  # Optional, for admin operations
 
     # RabbitMQ / Celery
     rabbitmq_url: str = "amqp://guest:guest@localhost:5672//"

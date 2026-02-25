@@ -9,19 +9,14 @@ from supabase import Client
 from src.database import get_supabase_client
 from src.celery_app.config import HAR_IMU_WINDOW_SECONDS
 from src.celery_app.schemas.har_schemas import HARLabel
-
-
-# Mock HAR labels for testing
+# Mock HAR labels - DB enum values
 MOCK_HAR_LABELS = [
     "walking",
     "running",
     "sitting",
     "standing",
-    "lying_down",
-    "climbing_stairs",
-    "descending_stairs",
-    "cycling",
-    "driving",
+    "lying",
+    "climbing stairs",
     "unknown",
 ]
 
@@ -89,18 +84,18 @@ async def run_mock_har_model(imu_data: list[dict]) -> tuple[str, float]:
 
     avg_magnitude = sum(acc_magnitudes) / len(acc_magnitudes) if acc_magnitudes else 0
 
-    # Mock classification based on acceleration magnitude
+    # Mock classification based on acceleration magnitude (returns DB enum values)
     if avg_magnitude < 0.5:
-        label = random.choice(["sitting", "lying_down", "standing"])
+        label = random.choice(["sitting", "lying", "standing"])
         confidence = 0.7 + random.random() * 0.2
     elif avg_magnitude < 2.0:
-        label = random.choice(["walking", "standing", "driving"])
+        label = random.choice(["walking", "standing", "sitting"])
         confidence = 0.6 + random.random() * 0.3
     elif avg_magnitude < 5.0:
-        label = random.choice(["walking", "climbing_stairs", "cycling"])
+        label = random.choice(["walking", "climbing stairs", "unknown"])
         confidence = 0.5 + random.random() * 0.4
     else:
-        label = random.choice(["running", "climbing_stairs", "descending_stairs"])
+        label = random.choice(["running", "climbing stairs"])
         confidence = 0.6 + random.random() * 0.3
 
     return label, round(confidence, 2)
@@ -116,11 +111,13 @@ async def insert_har_label(
     """
     Insert HAR label into the har table.
 
+    Database schema: har(id, timestamp, user, har_label)
+
     Args:
         user: User identifier
-        label: Activity label
-        confidence: Confidence score (0-1)
-        source: Source of the label (mock_har, ml_model, etc.)
+        label: Activity label (stored as har_label)
+        confidence: Unused, kept for API compatibility
+        source: Unused, kept for API compatibility
         client: Optional Supabase client
 
     Returns:
@@ -131,9 +128,7 @@ async def insert_har_label(
 
     data = {
         "user": user,
-        "label": label,
-        "confidence": confidence,
-        "source": source,
+        "har_label": label,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
