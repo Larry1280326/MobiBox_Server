@@ -84,12 +84,13 @@ cp .env.example .env
 #### Supabase Configuration
 
 1. Create a Supabase project at https://supabase.com/
-2. Get your project URL and anon key from **Project Settings → API**
+2. Get your project URL, anon key, and service role key from **Project Settings → API**
 3. Update `.env`:
 
 ```env
 SUPABASE_URL=https://your-project-id.supabase.co
 SUPABASE_ANON_KEY=your-anon-key-here
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here  # Optional, for admin operations
 ```
 
 #### Azure OpenAI Configuration (for LLM features)
@@ -422,6 +423,47 @@ celery -A src.celery_app.celery_app inspect registered
   }
   ```
 
+### Query Endpoints
+
+- `POST /get_summary_log` - Fetch the most recent summary log for a user
+  ```json
+  {
+    "user": "username",
+    "log_type": "hourly"  // or "daily"
+  }
+  ```
+
+- `POST /get_intervention` - Fetch the most recent intervention for a user
+  ```json
+  {
+    "user": "username"
+  }
+  ```
+
+- `POST /send_intervention_feedback` - Submit feedback for an intervention
+  ```json
+  {
+    "user": "username",
+    "intervention_id": 123,
+    "feedback": "This intervention was helpful",
+    "mc1": "Strongly agree",
+    "mc2": "Agree",
+    "mc3": "Neutral",
+    "mc4": "Disagree",
+    "mc5": "Strongly disagree",
+    "mc6": "Not applicable"
+  }
+  ```
+
+- `POST /send_log_feedback` - Submit feedback for a summary log
+  ```json
+  {
+    "user": 123,
+    "summary_logs_id": 456,
+    "feedback": "The summary was accurate"
+  }
+  ```
+
 ## Testing
 
 ### Run Test Suite
@@ -453,6 +495,8 @@ pytest --cov=src --cov-report=html
 | `test_llm_utils.py` | LLM service tests |
 | `test_celery_services.py` | Celery service tests |
 | `test_celery_tasks.py` | Celery task tests |
+| `test_query.py` | Query endpoint tests |
+| `test_intervention_pipeline_integration.py` | Intervention pipeline integration tests |
 
 ### Manual Task Testing
 
@@ -512,10 +556,21 @@ MobiBox_server/
 │   │   └── README.md        # Celery documentation
 │   ├── llm_utils/           # LLM integration utilities
 │   │   └── services.py
+│   ├── query/               # Query module for summary logs and interventions
+│   │   ├── __init__.py
+│   │   ├── constants.py
+│   │   ├── routes.py        # Query API routes
+│   │   ├── schemas.py       # Pydantic schemas
+│   │   └── service.py       # Business logic
 │   └── test/                # Test suite
 │       ├── __init__.py
 │       ├── conftest.py      # Pytest fixtures
-│       └── test_upload.py   # Upload endpoint tests
+│       ├── test_upload.py   # Upload endpoint tests
+│       ├── test_llm_utils.py # LLM service tests
+│       ├── test_celery_services.py # Celery service tests
+│       ├── test_celery_tasks.py # Celery task tests
+│       ├── test_query.py    # Query endpoint tests
+│       └── test_intervention_pipeline_integration.py # Intervention pipeline tests
 └── .gitignore
 ```
 
