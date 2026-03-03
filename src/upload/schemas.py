@@ -11,7 +11,7 @@ class DocumentItem(BaseModel):
 
     user: str
     timestamp: Optional[datetime] = None
-    volume: Optional[int] = None
+    volume: Optional[float] = None
     screen_on_ratio: Optional[float] = None
     wifi_connected: Optional[bool] = None
     wifi_ssid: Optional[str] = None

@@ -43,8 +43,31 @@ def upload_documents(request: DocumentUploadRequest) -> dict:
 
 
 def upload_imu(request: IMUUploadRequest) -> dict:
-    """Bulk insert IMU data into the imu table."""
+    """Bulk insert IMU data into the imu table.
+
+    This function is optimized for large payloads by inserting records in chunks
+    instead of building a single huge list of rows in memory.
+    """
     client = get_supabase_client()
-    rows = [_build_data_dict(item, IMU_OPTIONAL_FIELDS) for item in request.items]
-    response = client.table(IMU_TABLE).insert(rows).execute()
-    return {"status": "success", "inserted": len(rows), "data": response.data}
+
+    total_items = len(request.items)
+    # Tune this chunk size based on typical payload sizes and Supabase limits.
+    chunk_size = 1_000
+
+    last_response = None
+    inserted_count = 0
+
+    for start in range(0, total_items, chunk_size):
+        end = start + chunk_size
+        chunk = request.items[start:end]
+        rows = [_build_data_dict(item, IMU_OPTIONAL_FIELDS) for item in chunk]
+
+        # Perform the batched insert.
+        last_response = client.table(IMU_TABLE).insert(rows).execute()
+        inserted_count += len(rows)
+
+    return {
+        "status": "success",
+        "inserted": inserted_count,
+        "data": getattr(last_response, "data", None) if last_response is not None else None,
+    }
