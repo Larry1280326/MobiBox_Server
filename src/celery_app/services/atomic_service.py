@@ -12,8 +12,9 @@ This module implements 7 dimensions of atomic activity labeling:
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from supabase import Client
 
@@ -31,6 +32,8 @@ from src.celery_app.config import (
 from src.celery_app.schemas.atomic_schemas import AtomicActivity
 
 logger = logging.getLogger(__name__)
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 # ============================================================================
@@ -57,7 +60,7 @@ async def get_document_window(
     if client is None:
         client = get_supabase_client()
 
-    cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=seconds)
 
     response = await asyncio.to_thread(
         lambda: client.table("uploads")
@@ -90,7 +93,7 @@ async def get_har_window(
     if client is None:
         client = get_supabase_client()
 
-    cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=seconds)
 
     response = await asyncio.to_thread(
         lambda: client.table("har")
@@ -555,7 +558,7 @@ async def generate_all_atomic_labels(
 
     return AtomicActivity(
         user=user,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(CHINA_TZ),
         har_label=safe_result(results[0]),
         app_category=safe_result(results[1]),
         step_label=safe_result(results[2]),

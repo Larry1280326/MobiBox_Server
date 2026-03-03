@@ -136,10 +136,13 @@ def process_har_periodic(self) -> dict:
 
     async def process_active_users():
         import time
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        china_tz = ZoneInfo("Asia/Shanghai")
 
         # Get users with recent IMU data (last 10 seconds)
-        cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=10)
+        cutoff_time = datetime.now(china_tz) - timedelta(seconds=10)
 
         response = await asyncio.to_thread(
             lambda: client.table("imu")

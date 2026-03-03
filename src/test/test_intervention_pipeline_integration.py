@@ -13,12 +13,15 @@ All test data is cleaned up after tests complete.
 import asyncio
 import os
 import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 from unittest.mock import patch, AsyncMock
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 # Skip all tests if running in CI without Supabase credentials
 pytestmark = pytest.mark.skipif(
@@ -142,7 +145,7 @@ def sample_imu_data_factory():
     """Factory for creating sample IMU data."""
     def _create(user: str, count: int = 5, base_time: Optional[datetime] = None):
         if base_time is None:
-            base_time = datetime.now(timezone.utc)
+            base_time = datetime.now(CHINA_TZ)
 
         data = []
         for i in range(count):
@@ -168,7 +171,7 @@ def sample_upload_data_factory():
     """Factory for creating sample upload data."""
     def _create(user: str, count: int = 5, base_time: Optional[datetime] = None):
         if base_time is None:
-            base_time = datetime.now(timezone.utc)
+            base_time = datetime.now(CHINA_TZ)
 
         data = []
         for i in range(count):
@@ -481,7 +484,7 @@ class TestSummaryServiceIntegration:
         for i in range(5):
             activity = AtomicActivity(
                 user=test_user,
-                timestamp=datetime.now(timezone.utc) - timedelta(minutes=i * 10),
+                timestamp=datetime.now(CHINA_TZ) - timedelta(minutes=i * 10),
                 har_label="walking" if i < 3 else "sitting",
                 app_category="social communication app" if i < 2 else "office/working app",
                 step_label="medium",
@@ -512,7 +515,7 @@ class TestSummaryServiceIntegration:
         # Insert atomic activity
         activity = AtomicActivity(
             user=test_user,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(CHINA_TZ),
             har_label="walking",
         )
         await insert_atomic_activity(activity, client=supabase_client)
@@ -534,8 +537,8 @@ class TestSummaryServiceIntegration:
             "user": test_user,
             "log_type": "hourly",
             "summary": "Test summary content",
-            "start_timestamp": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
-            "end_timestamp": datetime.now(timezone.utc).isoformat(),
+            "start_timestamp": (datetime.now(CHINA_TZ) - timedelta(hours=1)).isoformat(),
+            "end_timestamp": datetime.now(CHINA_TZ).isoformat(),
         }
 
         result = await insert_summary_log(summary_log, client=supabase_client)
@@ -604,8 +607,8 @@ class TestInterventionServiceIntegration:
             "user": test_user,
             "log_type": "hourly",
             "summary": "Test summary for intervention",
-            "start_timestamp": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
-            "end_timestamp": datetime.now(timezone.utc).isoformat(),
+            "start_timestamp": (datetime.now(CHINA_TZ) - timedelta(hours=1)).isoformat(),
+            "end_timestamp": datetime.now(CHINA_TZ).isoformat(),
         }
         await insert_summary_log(summary_log, client=supabase_client)
 
@@ -627,8 +630,8 @@ class TestInterventionServiceIntegration:
         intervention = {
             "user": test_user,
             "intervention_content": "Take a break and stretch!",
-            "start_timestamp": datetime.now(timezone.utc).isoformat(),
-            "end_timestamp": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            "start_timestamp": datetime.now(CHINA_TZ).isoformat(),
+            "end_timestamp": (datetime.now(CHINA_TZ) + timedelta(minutes=5)).isoformat(),
         }
 
         result = await insert_intervention(intervention, client=supabase_client)
@@ -767,8 +770,8 @@ class TestFullPipelineIntegration:
             "user": test_user,
             "log_type": "hourly",
             "summary": summary_result["summary"],
-            "start_timestamp": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
-            "end_timestamp": datetime.now(timezone.utc).isoformat(),
+            "start_timestamp": (datetime.now(CHINA_TZ) - timedelta(hours=1)).isoformat(),
+            "end_timestamp": datetime.now(CHINA_TZ).isoformat(),
         }
         inserted_summary = await insert_summary_log(summary_log_data, client=supabase_client)
         assert inserted_summary is not None
@@ -802,8 +805,8 @@ class TestFullPipelineIntegration:
         intervention_data = {
             "user": test_user,
             "intervention_content": intervention_result["message"],
-            "start_timestamp": datetime.now(timezone.utc).isoformat(),
-            "end_timestamp": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            "start_timestamp": datetime.now(CHINA_TZ).isoformat(),
+            "end_timestamp": (datetime.now(CHINA_TZ) + timedelta(minutes=5)).isoformat(),
         }
         inserted_intervention = await insert_intervention(intervention_data, client=supabase_client)
         assert inserted_intervention is not None
@@ -817,7 +820,7 @@ class TestFullPipelineIntegration:
         assert len(final_har) >= 1
 
         # Verify atomic_activities were inserted (not uploads)
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=300)
+        cutoff = datetime.now(CHINA_TZ) - timedelta(seconds=300)
         atomic_resp = await asyncio.to_thread(
             lambda: supabase_client.table("atomic_activities")
             .select("*")
@@ -968,7 +971,7 @@ class TestDatabaseConstraints:
         test_user: str,
     ):
         """Test that interventions have valid timestamp range."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(CHINA_TZ)
         intervention = {
             "user": test_user,
             "intervention_content": "Test intervention",
@@ -994,8 +997,8 @@ class TestDatabaseConstraints:
                 "user": test_user,
                 "log_type": log_type,
                 "summary": f"Test {log_type} summary",
-                "start_timestamp": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
-                "end_timestamp": datetime.now(timezone.utc).isoformat(),
+                "start_timestamp": (datetime.now(CHINA_TZ) - timedelta(hours=1)).isoformat(),
+                "end_timestamp": datetime.now(CHINA_TZ).isoformat(),
             }
 
             result = await insert_summary_log(summary_log, client=supabase_client)

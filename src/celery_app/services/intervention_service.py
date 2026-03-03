@@ -7,8 +7,9 @@ This module handles:
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from supabase import Client
 from pydantic import BaseModel
@@ -17,6 +18,8 @@ from src.database import get_supabase_client
 from src.llm_utils.services import generate_structured_output
 
 logger = logging.getLogger(__name__)
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class InterventionOutput(BaseModel):
@@ -44,7 +47,7 @@ async def get_recent_summaries(
     if client is None:
         client = get_supabase_client()
 
-    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff_time = datetime.now(CHINA_TZ) - timedelta(hours=hours)
 
     response = await asyncio.to_thread(
         lambda: client.table("summary_logs")
@@ -127,7 +130,7 @@ Suggest an appropriate health intervention based on this summary."""
             "priority": result.priority,
             "category": result.category,
             "based_on_data": summary_log.get("dominant_activities", {}),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(CHINA_TZ).isoformat(),
         }
     except Exception as e:
         logger.error(f"Error generating intervention for user {user}: {e}")
@@ -139,7 +142,7 @@ Suggest an appropriate health intervention based on this summary."""
             "priority": "low",
             "category": "mental",
             "based_on_data": {},
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(CHINA_TZ).isoformat(),
         }
 
 

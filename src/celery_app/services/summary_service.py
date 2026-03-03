@@ -7,8 +7,9 @@ This module handles:
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from supabase import Client
 
@@ -17,6 +18,8 @@ from src.llm_utils.services import generate_structured_output
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 # ============================================================================
@@ -45,7 +48,7 @@ async def compress_atomic_activities(
     if client is None:
         client = get_supabase_client()
 
-    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff_time = datetime.now(CHINA_TZ) - timedelta(hours=hours)
 
     # Fetch atomic activities
     response = await asyncio.to_thread(
@@ -109,7 +112,7 @@ async def compress_atomic_activities(
         "period_hours": hours,
         "total_records": len(activities),
         "start_time": cutoff_time.isoformat(),
-        "end_time": datetime.now(timezone.utc).isoformat(),
+        "end_time": datetime.now(CHINA_TZ).isoformat(),
         "summary": {
             "har": dict(sorted(har_counts.items(), key=lambda x: x[1], reverse=True)[:5]),
             "app_usage": dict(sorted(app_counts.items(), key=lambda x: x[1], reverse=True)[:5]),
@@ -146,7 +149,7 @@ async def get_all_users_with_activities(
     if client is None:
         client = get_supabase_client()
 
-    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff_time = datetime.now(CHINA_TZ) - timedelta(hours=hours)
 
     response = await asyncio.to_thread(
         lambda: client.table("atomic_activities")
@@ -251,7 +254,7 @@ Create a summary of this user's {period_desc}."""
             "activity_counts": summary,
             "dominant_activities": dominant,
             "period_hours": compressed_data.get("period_hours", 1),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(CHINA_TZ).isoformat(),
         }
     except Exception as e:
         logger.error(f"Error generating summary for user {user}: {e}")

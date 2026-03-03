@@ -2,7 +2,8 @@
 
 import asyncio
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from supabase import Client
 
@@ -19,6 +20,8 @@ MOCK_HAR_LABELS = [
     "climbing stairs",
     "unknown",
 ]
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 async def get_imu_window(
@@ -40,7 +43,7 @@ async def get_imu_window(
     if client is None:
         client = get_supabase_client()
 
-    cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=seconds)
 
     response = await asyncio.to_thread(
         lambda: client.table("imu")
@@ -129,7 +132,7 @@ async def insert_har_label(
     data = {
         "user": user,
         "har_label": label,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(CHINA_TZ).isoformat(),
     }
 
     response = await asyncio.to_thread(
@@ -173,6 +176,6 @@ async def process_har_for_user(user: str, client: Client | None = None) -> HARLa
         user=user,
         label=label,
         confidence=confidence,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(CHINA_TZ),
         source="mock_har",
     )
