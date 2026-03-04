@@ -8,7 +8,7 @@ HAR_TASK_RATE_LIMIT = "30/m"  # 30 HAR tasks per minute
 ATOMIC_TASK_RATE_LIMIT = "10/m"  # 10 atomic activity tasks per minute
 
 # Processing windows (seconds)
-HAR_IMU_WINDOW_SECONDS = 10  # IMU data window for HAR (widened to catch batch data)
+HAR_IMU_WINDOW_SECONDS = 2  # IMU data window for HAR (widened to catch batch data)
 HAR_DATA_DELAY_SECONDS = 126  # Delay to wait for batch IMU data upload (126s = 2min - 6s buffer)
 HAR_IMU_WINDOW_SIZE = 50  # Samples per window (2s @ 25Hz, must match model)
 HAR_IMU_INPUT_CHANNELS = 9  # acc_X/Y/Z, gyro_X/Y/Z, mag_X/Y/Z (must match checkpoint)
