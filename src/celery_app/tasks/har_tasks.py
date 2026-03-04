@@ -7,7 +7,12 @@ from typing import List
 from celery import shared_task
 
 from src.celery_app.celery_app import celery_app
-from src.celery_app.config import HAR_TASK_RATE_LIMIT, HAR_DEBOUNCE_SECONDS
+from src.celery_app.config import (
+    HAR_TASK_RATE_LIMIT,
+    HAR_DEBOUNCE_SECONDS,
+    HAR_IMU_WINDOW_SECONDS,
+    HAR_DATA_DELAY_SECONDS,
+)
 from src.celery_app.services.har_service import process_har_for_user
 from src.database import get_supabase_client
 
@@ -145,23 +150,34 @@ def process_har_periodic(self) -> dict:
 
         china_tz = ZoneInfo("Asia/Shanghai")
 
-        # Get users with recent IMU data (last 10 seconds)
-        cutoff_time = datetime.now(china_tz) - timedelta(seconds=10)
+        # Compute delayed window to match batch upload behavior:
+        # we look at [now - delay - window, now - delay]
+        delayed_end = datetime.now(china_tz) - timedelta(seconds=HAR_DATA_DELAY_SECONDS)
+        delayed_start = delayed_end - timedelta(seconds=HAR_IMU_WINDOW_SECONDS)
+
+        logger.debug(
+            "Periodic HAR active-user window: %s to %s (delay=%ss, window=%ss)",
+            delayed_start.isoformat(),
+            delayed_end.isoformat(),
+            HAR_DATA_DELAY_SECONDS,
+            HAR_IMU_WINDOW_SECONDS,
+        )
 
         response = await asyncio.to_thread(
             lambda: client.table("imu")
             .select("user")
-            .gte("timestamp", cutoff_time.isoformat())
+            .gte("timestamp", delayed_start.isoformat())
+            .lte("timestamp", delayed_end.isoformat())
             .execute()
         )
 
         if not response.data:
-            logger.debug("No users with recent IMU data")
+            logger.debug("No users with IMU data in delayed window")
             return
 
         # Get unique users
         users = list(set(item["user"] for item in response.data))
-        logger.info(f"Found {len(users)} users with recent IMU data")
+        logger.info(f"Found {len(users)} users with IMU data in delayed window")
 
         for user in users:
             # Check debounce

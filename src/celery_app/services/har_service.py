@@ -81,14 +81,18 @@ async def get_imu_window(
     if client is None:
         client = get_supabase_client()
 
-    # Apply delay to account for batch upload timing
-    # Fetch data from (now - delay - seconds) to (now - delay)
+    # Apply delay to account for batch upload timing:
+    # fetch data from (now - delay - seconds) to (now - delay)
     delayed_end = datetime.now(CHINA_TZ) - timedelta(seconds=HAR_DATA_DELAY_SECONDS)
     delayed_start = delayed_end - timedelta(seconds=seconds)
 
     logger.debug(
-        f"Fetching IMU window for {user}: {delayed_start.isoformat()} to {delayed_end.isoformat()} "
-        f"(delay={HAR_DATA_DELAY_SECONDS}s, window={seconds}s)"
+        "Fetching IMU window for %s: %s to %s (delay=%ss, window=%ss)",
+        user,
+        delayed_start.isoformat(),
+        delayed_end.isoformat(),
+        HAR_DATA_DELAY_SECONDS,
+        seconds,
     )
 
     response = await asyncio.to_thread(
@@ -102,7 +106,7 @@ async def get_imu_window(
     )
 
     data = response.data if response.data else []
-    logger.debug(f"Found {len(data)} IMU records for {user}")
+    logger.debug("Found %d IMU records for %s", len(data), user)
     return data
 
 
