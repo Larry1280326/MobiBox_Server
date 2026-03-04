@@ -6,6 +6,7 @@ This module handles:
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
@@ -97,19 +98,23 @@ Return a JSON object with:
 - category: "physical", "mental", "social", or "digital_wellbeing"
 """
 
+    # Convert dicts/lists to JSON and escape curly braces for ChatPromptTemplate
+    def fmt(obj):
+        return json.dumps(obj).replace("{", "{{").replace("}", "}}")
+
     user_prompt = f"""User activity summary:
 
 Title: {summary_log.get('title', 'No title')}
 
 Summary: {summary_log.get('summary', 'No summary available')}
 
-Key Highlights: {summary_log.get('highlights', [])}
+Key Highlights: {fmt(summary_log.get('highlights', []))}
 
-Dominant Activities: {summary_log.get('dominant_activities', {})}
+Dominant Activities: {fmt(summary_log.get('dominant_activities', {}))}
 
-Activity Counts: {summary_log.get('activity_counts', {})}
+Activity Counts: {fmt(summary_log.get('activity_counts', {}))}
 
-Recommendations from summary: {summary_log.get('recommendations', [])}
+Recommendations from summary: {fmt(summary_log.get('recommendations', []))}
 
 Period: {summary_log.get('period_hours', 1)} hour(s)
 
