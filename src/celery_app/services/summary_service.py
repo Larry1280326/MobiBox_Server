@@ -249,17 +249,20 @@ Create a summary of this user's {period_desc}."""
             temperature=0.4,
         )
 
+        # Build full summary text including title, highlights, and recommendations
+        full_summary = f"{result.title}\n\n{result.summary}"
+        if result.highlights:
+            full_summary += f"\n\nHighlights: {', '.join(result.highlights)}"
+        if result.recommendations:
+            full_summary += f"\n\nRecommendations: {', '.join(result.recommendations)}"
+
+        # Return only fields that match the database schema
         return {
             "user": user,
             "log_type": log_type,
-            "title": result.title,
-            "summary": result.summary,
-            "highlights": result.highlights,
-            "recommendations": result.recommendations,
-            "activity_counts": summary,
-            "dominant_activities": dominant,
-            "period_hours": compressed_data.get("period_hours", 1),
-            "timestamp": datetime.now(CHINA_TZ).isoformat(),
+            "summary": full_summary,
+            "start_timestamp": compressed_data.get("start_time"),
+            "end_timestamp": compressed_data.get("end_time"),
         }
     except Exception as e:
         logger.error(f"Error generating summary for user {user}: {e}")

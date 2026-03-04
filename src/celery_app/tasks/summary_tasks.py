@@ -144,7 +144,7 @@ def generate_hourly_summary() -> dict:
                     results["processed"] += 1
                     results["summaries"].append({
                         "user": user,
-                        "title": summary_log.get("title"),
+                        "log_type": summary_log.get("log_type"),
                     })
                 else:
                     results["skipped"] += 1
@@ -202,7 +202,7 @@ def generate_daily_summary() -> dict:
                     results["processed"] += 1
                     results["summaries"].append({
                         "user": user,
-                        "title": summary_log.get("title"),
+                        "log_type": summary_log.get("log_type"),
                     })
                 else:
                     results["skipped"] += 1
