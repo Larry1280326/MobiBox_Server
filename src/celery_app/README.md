@@ -15,22 +15,22 @@ This module implements a scalable Celery pipeline for processing mobile sensor d
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           CELERY WORKERS                                     │
 │                                                                              │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────────────┐  │
-│  │ process_har     │    │ process_atomic  │    │ Scheduled Tasks (Beat)  │  │
-│  │ (on IMU upload)│    │ (on doc upload)│    │ - hourly_interventions │  │
-│  │                 │    │                 │    │ - hourly_summary       │  │
-│  │ Runs mock HAR   │    │ 7 dimensions:  │    │ - daily_summary        │  │
-│  │ every 2s window │    │ - HAR (LLM)     │    │                         │  │
-│  │                 │    │ - APP (LLM)     │    │ Compress → Generate    │  │
-│  │                 │    │ - Steps         │    │                         │  │
-│  │                 │    │ - Phone         │    │                         │  │
-│  │                 │    │ - Social        │    │                         │  │
-│  │                 │    │ - Movement      │    │                         │  │
-│  │                 │    │ - Location(LLM) │    │                         │  │
-│  └────────┬────────┘    └────────┬────────┘    └────────────┬────────────┘  │
-│           │                      │                          │               │
-│           ▼                      ▼                          ▼               │
-│      har table           atomic_activities table    interventions/summary   │
+│  ┌─────────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │
+│  │ process_har_batch   │  │ process_atomic  │  │ Scheduled Tasks (Beat)  │  │
+│  │ (on IMU upload)     │  │ (on doc upload) │  │ - process_har_periodic  │  │
+│  │                     │  │                 │  │   (every 2 seconds)     │  │
+│  │ process_har_periodic│  │ 7 dimensions:  │  │ - hourly_interventions  │  │
+│  │ (every 2 seconds)   │  │ - HAR (LLM)     │  │ - hourly_summary        │  │
+│  │                     │  │ - APP (LLM)     │  │ - daily_summary         │  │
+│  │ IMU Transformer or  │  │ - Steps         │  │                         │  │
+│  │ Mock HAR Model      │  │ - Phone         │  │ Compress → Generate     │  │
+│  │                     │  │ - Social        │  │                         │  │
+│  │                     │  │ - Movement      │  │                         │  │
+│  │                     │  │ - Location(LLM) │  │                         │  │
+│  └──────────┬──────────┘  └────────┬────────┘  └────────────┬────────────┘  │
+│             │                      │                          │               │
+│             ▼                      ▼                          ▼               │
+│        har table           atomic_activities table    interventions/summary   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -47,15 +47,25 @@ This module implements a scalable Celery pipeline for processing mobile sensor d
 # Start RabbitMQ
 docker run -d -p 5672:5672 rabbitmq
 
-# Start Celery worker
-celery -A src.celery_app.celery_app worker --loglevel=info
+# Start Celery worker with beat scheduler (recommended)
+celery -A src.celery_app.celery_app worker --beat \
+    -Q default,har,atomic,summary \
+    --loglevel=INFO
 
-# Start Celery beat (for scheduled tasks)
-celery -A src.celery_app.celery_app beat --loglevel=info
+# OR run worker and beat separately
+# Terminal 1: Worker
+celery -A src.celery_app.celery_app worker \
+    -Q default,har,atomic,summary \
+    --loglevel=INFO
+
+# Terminal 2: Beat scheduler
+celery -A src.celery_app.celery_app beat --loglevel=INFO
 
 # Start FastAPI
 uvicorn src.main:app --reload
 ```
+
+> **Note:** The worker must listen to all queues (`default,har,atomic,summary`) because tasks are routed to specific queues based on their type.
 
 ## Configuration
 
@@ -78,32 +88,74 @@ CELERY_RESULT_BACKEND=rpc://
 |---------|---------|-------------|
 | `HAR_TASK_RATE_LIMIT` | 30/m | Rate limit for HAR tasks |
 | `ATOMIC_TASK_RATE_LIMIT` | 10/m | Rate limit for atomic activity tasks |
-| `HAR_IMU_WINDOW_SECONDS` | 2 | IMU data window for HAR |
-| `ATOMIC_*_WINDOW_SECONDS` | 10-120 | Data windows for each atomic dimension |
-| `HAR_DEBOUNCE_SECONDS` | 2 | Minimum time between HAR processing |
-| `ATOMIC_DEBOUNCE_SECONDS` | 5 | Minimum time between atomic processing |
+| `HAR_IMU_WINDOW_SECONDS` | 10 | IMU data window for HAR (seconds) |
+| `HAR_DATA_DELAY_SECONDS` | 126 | Delay before fetching IMU data (accounts for batch upload) |
+| `HAR_IMU_WINDOW_SIZE` | 50 | Samples per window (2s @ 25Hz, must match model) |
+| `HAR_IMU_INPUT_CHANNELS` | 9 | Number of IMU channels (acc/gyro/mag × X/Y/Z) |
+| `HAR_DEBOUNCE_SECONDS` | 2 | Minimum time between HAR processing per user |
+| `ATOMIC_DEBOUNCE_SECONDS` | 5 | Minimum time between atomic processing per user |
+| `ATOMIC_*_WINDOW_SECONDS` | 2-120 | Data windows for each atomic dimension |
+
+### HAR Model Configuration
+
+| Setting | Description |
+|---------|-------------|
+| `HAR_IMU_MODEL_CHECKPOINT` | Path to IMU Transformer checkpoint (.pth file) |
+| `HAR_IMU_MODEL_CONFIG` | Model architecture config (must match checkpoint) |
+
+Set `HAR_IMU_MODEL_CHECKPOINT` to `None` to use the mock HAR model instead.
 
 ## Task Pipelines
 
 ### 1. HAR Processing Pipeline
 
-**Trigger:** IMU data upload via `/upload/imu`
+**Triggers:**
+1. IMU data upload via `/upload/imu` → `process_har_batch`
+2. Periodic task every 2 seconds → `process_har_periodic`
 
 ```
-IMU Upload → process_har_batch (debounced, 2s window)
-          → Mock HAR Model
-          → Insert to har table
+IMU Upload / Periodic (2s)
+    │
+    ▼
+process_har_batch / process_har_periodic
+    │
+    ├── Check debounce (2s minimum between runs per user)
+    │
+    ├── Fetch IMU data from delayed window
+    │   └── Window: (now - 126s - 10s) to (now - 126s)
+    │   └── Delay accounts for batch IMU upload every 2 minutes
+    │
+    ├── Run HAR Model
+    │   ├── If checkpoint exists: IMU Transformer (7 classes)
+    │   └── Otherwise: Mock HAR model (heuristic-based)
+    │
+    └── Insert result to har table
 ```
 
-**Task:** `process_har_batch(user_list: List[str])`
+**Why the 126-second delay?**
+- IMU data is uploaded in batches every 2 minutes from the mobile client
+- The 126s delay (2 min - 6s buffer) ensures we query data that has already been inserted
+- Without this delay, the HAR task would find no data and skip processing
 
-- Fetches IMU data for each user from the last 2 seconds
-- Runs mock HAR model to classify activity
-- Inserts HAR label to database
+**HAR Labels (7 classes):**
 
-**Mock HAR Labels:**
-- walking, running, sitting, standing, lying_down
-- climbing_stairs, descending_stairs, cycling, driving, unknown
+| Index | Label |
+|-------|-------|
+| 0 | unknown |
+| 1 | standing |
+| 2 | sitting |
+| 3 | lying |
+| 4 | walking |
+| 5 | climbing stairs |
+| 6 | running |
+
+**Tasks:**
+
+| Task | Name | Queue | Description |
+|------|------|-------|-------------|
+| `process_har_batch` | `process_har_batch` | har | Process HAR for a list of users (triggered by upload) |
+| `process_har_single` | `process_har_single` | har | Process HAR for a single user |
+| `process_har_periodic` | `process_har_periodic` | har | Periodic HAR for all active users (every 2s) |
 
 ### 2. Atomic Activities Pipeline
 
@@ -142,21 +194,21 @@ Celery Beat (hourly/daily) → compress_atomic_activities
 
 **Scheduled Tasks:**
 
-| Task | Schedule | Description |
-|------|----------|-------------|
-| `generate_hourly_interventions` | Every hour at minute 0 | Generate health interventions |
-| `generate_hourly_summary` | Every hour at minute 0 | Generate hourly activity summary |
-| `generate_daily_summary` | Daily at midnight | Generate daily activity summary |
+| Task | Name | Schedule | Queue |
+|------|------|----------|-------|
+| `process_har_periodic` | `process_har_periodic` | Every 2 seconds | har |
+| `generate_hourly_interventions` | `generate_hourly_interventions` | Every hour at minute 5 | summary |
+| `generate_hourly_summary` | `generate_hourly_summary` | Every hour at minute 0 | summary |
+| `generate_daily_summary` | `generate_daily_summary` | Daily at midnight | summary |
 
 ## Database Tables
 
 ### har
 | Column | Type | Description |
 |--------|------|-------------|
+| id | uuid | Primary key |
 | user | text | User identifier |
-| label | text | Activity label |
-| confidence | float | Confidence score (0-1) |
-| source | text | Source of label (mock_har) |
+| har_label | text | Activity label (enum) |
 | timestamp | timestamptz | Record timestamp |
 
 ### atomic_activities
@@ -198,10 +250,13 @@ Celery Beat (hourly/daily) → compress_atomic_activities
 ### Trigger HAR Processing Manually
 
 ```python
-from src.celery_app.tasks.har_tasks import process_har_batch
+from src.celery_app.tasks.har_tasks import process_har_batch, process_har_single
 
 # Process HAR for a list of users
 result = process_har_batch.delay(["user1", "user2", "user3"])
+
+# Process HAR for a single user
+result = process_har_single.delay("user1")
 ```
 
 ### Trigger Atomic Activities Manually
@@ -234,6 +289,47 @@ result = trigger_summary_for_user.delay("user1", hours=1)
 result = trigger_summary_for_user.delay("user1", hours=24)
 ```
 
+## Queue Routing
+
+Tasks are automatically routed to specific queues:
+
+| Queue | Tasks |
+|-------|-------|
+| `default` | Default queue for unmapped tasks |
+| `har` | All HAR tasks (`process_har_batch`, `process_har_periodic`, etc.) |
+| `atomic` | All atomic activity tasks |
+| `summary` | All summary and intervention tasks |
+
+**Important:** Workers must listen to all queues to process all task types:
+```bash
+celery -A src.celery_app.celery_app worker -Q default,har,atomic,summary
+```
+
+## Debugging
+
+### Enable Debug Logging
+
+Debug logging is enabled for HAR service by default. To see detailed IMU query information:
+
+```bash
+celery -A src.celery_app.celery_app worker --loglevel=INFO
+```
+
+You will see logs like:
+```
+[DEBUG] Fetching IMU window for user1: 2026-03-04T15:53:06+08:00 to 2026-03-04T15:53:16+08:00 (delay=126s, window=10s)
+[DEBUG] Found 25 IMU records for user1
+```
+
+### Common Issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| HAR always skipped | No IMU data in window | Check `HAR_DATA_DELAY_SECONDS` matches upload frequency |
+| Periodic task not running | Task name mismatch | Ensure beat schedule uses correct task name |
+| Tasks not processed | Worker not listening to queue | Add `-Q default,har,atomic,summary` to worker command |
+| Beat scheduler not triggering | Beat not running | Start beat with `--beat` flag or separate `celery beat` process |
+
 ## Scalability Considerations
 
 1. **Rate Limiting:** Tasks use `rate_limit` to prevent overload
@@ -258,4 +354,7 @@ celery -A src.celery_app.celery_app call process_har_batch --args='["test_user"]
 
 # Check task status
 celery -A src.celery_app.celery_app inspect active
+
+# List registered tasks
+celery -A src.celery_app.celery_app inspect registered
 ```

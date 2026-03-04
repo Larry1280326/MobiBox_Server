@@ -1,9 +1,14 @@
 """Celery application instance and configuration."""
 
+import logging
+
 from celery import Celery
 
 from src.config import get_settings
 from src.celery_app.config import CELERY_BEAT_SCHEDULE
+
+# Enable debug logging for HAR service to see IMU query details
+logging.getLogger("src.celery_app.services.har_service").setLevel(logging.DEBUG)
 
 settings = get_settings()
 
