@@ -51,13 +51,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "src.celery_app.tasks.atomic_tasks.process_atomic_periodic",
         "schedule": 10.0,  # Every 10 seconds
     },
+    # DEBUG: Changed from hourly to every minute for debugging
     "hourly-summary": {
         "task": "generate_hourly_summary",
-        "schedule": crontab(minute=0),  # Every hour at minute 0
+        "schedule": crontab(minute='*'),  # Every minute (was: minute=0 for hourly)
     },
     "hourly-interventions": {
         "task": "generate_hourly_interventions",
-        "schedule": crontab(minute=5),  # 5 minutes after summary
+        "schedule": crontab(minute='*'),  # Every minute (was: minute=5 for hourly)
     },
     "daily-summary": {
         "task": "generate_daily_summary",
