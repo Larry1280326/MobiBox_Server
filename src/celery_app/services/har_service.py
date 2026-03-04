@@ -1,6 +1,7 @@
 """Business logic for HAR (Human Activity Recognition) processing."""
 
 import asyncio
+import logging
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -12,11 +13,14 @@ from supabase import Client
 from src.database import get_supabase_client
 from src.celery_app.config import (
     HAR_IMU_WINDOW_SECONDS,
+    HAR_DATA_DELAY_SECONDS,
     HAR_IMU_WINDOW_SIZE,
     HAR_IMU_INPUT_CHANNELS,
     HAR_IMU_MODEL_CHECKPOINT,
     HAR_IMU_MODEL_CONFIG,
 )
+
+logger = logging.getLogger(__name__)
 from src.celery_app.schemas.har_schemas import HARLabel
 
 # IMU model: label index -> DB enum string (from imu_labels.md)
@@ -61,11 +65,14 @@ async def get_imu_window(
     client: Client | None = None,
 ) -> list[dict]:
     """
-    Fetch IMU data for a user from the last X seconds.
+    Fetch IMU data for a user from a delayed time window.
+
+    Since IMU data is uploaded in batches every 2 minutes, we apply a delay
+    to ensure we're fetching data that has already been inserted.
 
     Args:
         user: User identifier
-        seconds: Number of seconds to look back
+        seconds: Number of seconds to look back (window size)
         client: Optional Supabase client (creates new one if not provided)
 
     Returns:
@@ -74,18 +81,29 @@ async def get_imu_window(
     if client is None:
         client = get_supabase_client()
 
-    cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=seconds)
+    # Apply delay to account for batch upload timing
+    # Fetch data from (now - delay - seconds) to (now - delay)
+    delayed_end = datetime.now(CHINA_TZ) - timedelta(seconds=HAR_DATA_DELAY_SECONDS)
+    delayed_start = delayed_end - timedelta(seconds=seconds)
+
+    logger.debug(
+        f"Fetching IMU window for {user}: {delayed_start.isoformat()} to {delayed_end.isoformat()} "
+        f"(delay={HAR_DATA_DELAY_SECONDS}s, window={seconds}s)"
+    )
 
     response = await asyncio.to_thread(
         lambda: client.table("imu")
         .select("*")
         .eq("user", user)
-        .gte("timestamp", cutoff_time.isoformat())
+        .gte("timestamp", delayed_start.isoformat())
+        .lte("timestamp", delayed_end.isoformat())
         .order("timestamp", desc=False)
         .execute()
     )
 
-    return response.data if response.data else []
+    data = response.data if response.data else []
+    logger.debug(f"Found {len(data)} IMU records for {user}")
+    return data
 
 
 def _imu_data_to_tensor(imu_data: list[dict]) -> np.ndarray:
