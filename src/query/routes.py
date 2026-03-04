@@ -13,6 +13,9 @@ from src.query.schemas import (
     InterventionFeedbackResponse,
     SummaryLogFeedbackRequest,
     SummaryLogFeedbackResponse,
+    AtomicActivitiesRequest,
+    AtomicActivitiesResponse,
+    AtomicActivitiesData,
 )
 from src.query.service import (
     get_summary_logs,
@@ -21,6 +24,7 @@ from src.query.service import (
     format_intervention,
     submit_intervention_feedback,
     submit_summary_log_feedback,
+    get_atomic_activities,
 )
 
 router = APIRouter(tags=["query"])
@@ -113,5 +117,38 @@ async def send_log_feedback(request: SummaryLogFeedbackRequest):
             feedback=request.feedback,
         )
         return SummaryLogFeedbackResponse()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/get_compressed_atomic_activities", response_model=AtomicActivitiesResponse)
+async def fetch_atomic_activities(request: AtomicActivitiesRequest):
+    """
+    Fetch compressed atomic activities for a user.
+
+    Returns atomic activity labels grouped by type:
+    - sport: HAR activity labels
+    - appCategory: App usage categories
+    - location: Location context labels
+    - movement: Movement pattern labels
+    - stepCategory: Step activity labels
+    - phoneCategory: Phone usage labels
+
+    Args:
+        request: Contains user identifier and duration (seconds since last fetch)
+
+    Returns:
+        AtomicActivitiesResponse with grouped activity data
+    """
+    try:
+        data = await get_atomic_activities(
+            user=request.user,
+            duration=request.duration,
+        )
+
+        return AtomicActivitiesResponse(
+            status="success",
+            data=AtomicActivitiesData(**data),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,7 +1,7 @@
 """Pydantic schemas for query endpoints."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, Field
 
@@ -111,3 +111,37 @@ class SummaryLogFeedbackResponse(BaseModel):
 
     status: str = "success"
     message: str = "Feedback submitted successfully"
+
+
+# ============================================================================
+# Atomic Activities Schemas
+# ============================================================================
+
+
+class AtomicActivitiesRequest(BaseModel):
+    """Request model for fetching compressed atomic activities."""
+
+    user: str = Field(..., min_length=1, description="User identifier")
+    duration: int = Field(
+        0,
+        ge=0,
+        description="Duration in seconds since last fetch (0 for all available data)",
+    )
+
+
+class AtomicActivitiesData(BaseModel):
+    """Compressed atomic activities data."""
+
+    sport: List[str] = Field(default_factory=list, description="HAR labels (sport activities)")
+    appCategory: List[str] = Field(default_factory=list, description="App category values")
+    location: List[str] = Field(default_factory=list, description="Location labels")
+    movement: List[str] = Field(default_factory=list, description="Movement labels")
+    stepCategory: List[str] = Field(default_factory=list, description="Step count categories")
+    phoneCategory: List[str] = Field(default_factory=list, description="Phone usage categories")
+
+
+class AtomicActivitiesResponse(BaseModel):
+    """Response model for compressed atomic activities."""
+
+    status: str = "success"
+    data: Optional[AtomicActivitiesData] = Field(None, description="Compressed atomic activities data")

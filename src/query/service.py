@@ -1,8 +1,9 @@
-"""Business logic for querying summary logs and interventions."""
+"""Business logic for querying summary logs, interventions, and atomic activities."""
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from supabase import Client
 
@@ -12,7 +13,10 @@ from src.query.constants import (
     INTERVENTIONS_TABLE,
     INTERVENTION_FEEDBACKS_TABLE,
     SUMMARY_LOG_FEEDBACKS_TABLE,
+    ATOMIC_ACTIVITIES_TABLE,
 )
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 async def get_summary_logs(
@@ -197,3 +201,83 @@ async def submit_summary_log_feedback(
     )
 
     return response.data[0] if response.data else {}
+
+
+# ============================================================================
+# Atomic Activities
+# ============================================================================
+
+
+async def get_atomic_activities(
+    user: str,
+    duration: int,
+    client: Client | None = None,
+) -> dict:
+    """
+    Fetch atomic activities for a user within a duration.
+
+    Args:
+        user: User identifier
+        duration: Duration in seconds since last fetch (0 for all)
+        client: Optional Supabase client
+
+    Returns:
+        Dictionary with grouped atomic activity values
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    # Build query
+    query = client.table(ATOMIC_ACTIVITIES_TABLE).select("*").eq("user", user)
+
+    # Apply time filter if duration > 0
+    if duration > 0:
+        cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=duration)
+        query = query.gte("timestamp", cutoff_time.isoformat())
+
+    # Order by timestamp ascending
+    query = query.order("timestamp", desc=False)
+
+    response = await asyncio.to_thread(lambda: query.execute())
+
+    if not response.data:
+        return {
+            "sport": [],
+            "appCategory": [],
+            "location": [],
+            "movement": [],
+            "stepCategory": [],
+            "phoneCategory": [],
+        }
+
+    # Group data by field names
+    sport_labels = []
+    app_categories = []
+    locations = []
+    movements = []
+    step_labels = []
+    phone_usages = []
+
+    for record in response.data:
+        # Map database columns to frontend field names
+        if record.get("har_label"):
+            sport_labels.append(record["har_label"])
+        if record.get("app_category"):
+            app_categories.append(record["app_category"])
+        if record.get("location"):
+            locations.append(record["location"])
+        if record.get("movement"):
+            movements.append(record["movement"])
+        if record.get("step_count"):
+            step_labels.append(record["step_count"])
+        if record.get("phone_usage"):
+            phone_usages.append(record["phone_usage"])
+
+    return {
+        "sport": sport_labels,
+        "appCategory": app_categories,
+        "location": locations,
+        "movement": movements,
+        "stepCategory": step_labels,
+        "phoneCategory": phone_usages,
+    }

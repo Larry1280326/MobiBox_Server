@@ -121,3 +121,92 @@ def process_atomic_single(user: str) -> dict:
         Processing result
     """
     return process_atomic_activities_batch.delay([user])
+
+
+@celery_app.task(
+    bind=True,
+    rate_limit=ATOMIC_TASK_RATE_LIMIT,
+    name="src.celery_app.tasks.atomic_tasks.process_atomic_periodic",
+)
+def process_atomic_periodic(self) -> dict:
+    """
+    Periodic task to generate atomic activities for all active users.
+
+    This task runs every 10 seconds (configured in beat schedule) and generates
+    atomic activities for users that have recent data and haven't been processed recently.
+
+    Returns:
+        Summary of processing results
+    """
+    logger.info("Running periodic atomic activities processing")
+
+    client = get_supabase_client()
+    results = {
+        "processed": 0,
+        "skipped": 0,
+        "errors": 0,
+        "activities": [],
+    }
+
+    async def process_active_users():
+        import time
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        from src.celery_app.config import ATOMIC_DEBOUNCE_SECONDS
+
+        china_tz = ZoneInfo("Asia/Shanghai")
+
+        # Look for users with recent uploads (document data)
+        cutoff_time = datetime.now(china_tz) - timedelta(seconds=ATOMIC_DEBOUNCE_SECONDS)
+
+        logger.debug(
+            "Periodic atomic active-user cutoff: %s",
+            cutoff_time.isoformat(),
+        )
+
+        response = await asyncio.to_thread(
+            lambda: client.table("uploads")
+            .select("user")
+            .gte("timestamp", cutoff_time.isoformat())
+            .execute()
+        )
+
+        if not response.data:
+            logger.debug("No users with recent uploads")
+            return
+
+        # Get unique users
+        users = list(set(item["user"] for item in response.data))
+        logger.info(f"Found {len(users)} users with recent uploads")
+
+        for user in users:
+            # Check debounce
+            if not _should_process_user(user):
+                logger.debug(f"Skipping user {user} due to debounce")
+                results["skipped"] += 1
+                continue
+
+            try:
+                # Generate all atomic labels
+                activity = await generate_all_atomic_labels(user, client)
+
+                # Insert to database
+                await insert_atomic_activity(activity, client)
+
+                results["processed"] += 1
+                results["activities"].append({
+                    "user": user,
+                    "har_label": activity.har_label,
+                    "app_category": activity.app_category,
+                })
+                _mark_user_processed(user)
+
+            except Exception as e:
+                logger.error(f"Error processing atomic activities for user {user}: {e}")
+                results["errors"] += 1
+
+    _run_async(process_active_users())
+
+    logger.info(f"Periodic atomic activities complete: {results}")
+    return results
