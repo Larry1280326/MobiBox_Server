@@ -407,7 +407,7 @@ class TestAtomicServiceIntegration:
         """Test inserting atomic activity to real database."""
         activity = AtomicActivity(
             user=test_user,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(CHINA_TZ),
             har_label="walking",
             app_category="social communication app",
             step_label="medium",
@@ -558,7 +558,7 @@ class TestSummaryServiceIntegration:
         for i in range(3):
             activity = AtomicActivity(
                 user=test_user,
-                timestamp=datetime.now(timezone.utc) - timedelta(minutes=i * 10),
+                timestamp=datetime.now(CHINA_TZ) - timedelta(minutes=i * 10),
                 har_label="sitting",
                 app_category="office/working app",
             )
