@@ -2,6 +2,7 @@
 
 from src.celery_app.services.har_service import (
     get_imu_window,
+    run_har_model,
     run_mock_har_model,
     insert_har_label,
 )
@@ -26,6 +27,7 @@ from src.celery_app.services.intervention_service import (
 
 __all__ = [
     "get_imu_window",
+    "run_har_model",
     "run_mock_har_model",
     "insert_har_label",
     "generate_har_label",

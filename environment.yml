@@ -59,3 +59,7 @@ dependencies:
     # Celery
     - celery
     - aio-pika
+
+    # HAR / IMU model (numpy required; torch for transformer when checkpoint set)
+    - numpy
+    - torch

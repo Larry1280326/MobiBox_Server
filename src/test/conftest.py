@@ -1,11 +1,33 @@
-"""Pytest fixtures for upload tests."""
+"""Pytest fixtures and config for tests."""
 
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from src.main import app
+
+# Suppress Supabase client deprecation warnings (timeout/verify moved to http client)
+warnings.filterwarnings(
+    "ignore",
+    message="The 'timeout' parameter is deprecated.*",
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message="The 'verify' parameter is deprecated.*",
+    category=DeprecationWarning,
+)
+
+
+def pytest_configure(config):
+    """Register warning filters with pytest so they apply during test runs."""
+    # Supabase SyncPostgrestClient passes deprecated timeout/verify; ignore in that module
+    config.addinivalue_line(
+        "filterwarnings",
+        "ignore::DeprecationWarning:supabase._sync.client",
+    )
 
 
 @pytest.fixture

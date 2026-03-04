@@ -9,6 +9,8 @@ ATOMIC_TASK_RATE_LIMIT = "10/m"  # 10 atomic activity tasks per minute
 
 # Processing windows (seconds)
 HAR_IMU_WINDOW_SECONDS = 2  # IMU data window for HAR
+HAR_IMU_WINDOW_SIZE = 50  # Samples per window (2s @ 25Hz, must match model)
+HAR_IMU_INPUT_CHANNELS = 9  # acc_X/Y/Z, gyro_X/Y/Z, mag_X/Y/Z (must match checkpoint)
 ATOMIC_HAR_WINDOW_SECONDS = 2  # Window for HAR-based atomic activity
 ATOMIC_APP_WINDOW_SECONDS = 10  # Window for app category
 ATOMIC_STEP_WINDOW_SECONDS = 10  # Window for step label
@@ -20,6 +22,23 @@ ATOMIC_LOCATION_WINDOW_SECONDS = 120  # Window for location label (2 min)
 # Debounce settings
 HAR_DEBOUNCE_SECONDS = 2  # Minimum time between HAR processing per user
 ATOMIC_DEBOUNCE_SECONDS = 5  # Minimum time between atomic processing per user
+
+# IMU HAR model (Transformer encoder); set to None to use mock
+HAR_IMU_MODEL_CHECKPOINT = "src/celery_app/services/imu_model_utils/ckpts/run_05_06_25_14_16_final_no_cycling_7_class8_25.pth"
+
+# IMU Transformer config (must match trained checkpoint)
+HAR_IMU_MODEL_CONFIG = {
+    "input_dim": 9,
+    "window_size": 50,
+    "num_classes": 7,
+    "transformer_dim": 64,
+    "nhead": 4,
+    "dim_feedforward": 128,
+    "num_encoder_layers": 6,
+    "transformer_dropout": 0.1,
+    "transformer_activation": "gelu",
+    "encode_position": True,
+}
 
 # Beat schedule
 CELERY_BEAT_SCHEDULE = {

@@ -3,14 +3,41 @@
 import asyncio
 import random
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import numpy as np
 from supabase import Client
 
 from src.database import get_supabase_client
-from src.celery_app.config import HAR_IMU_WINDOW_SECONDS
+from src.celery_app.config import (
+    HAR_IMU_WINDOW_SECONDS,
+    HAR_IMU_WINDOW_SIZE,
+    HAR_IMU_INPUT_CHANNELS,
+    HAR_IMU_MODEL_CHECKPOINT,
+    HAR_IMU_MODEL_CONFIG,
+)
 from src.celery_app.schemas.har_schemas import HARLabel
-# Mock HAR labels - DB enum values
+
+# IMU model: label index -> DB enum string (from imu_labels.md)
+HAR_LABEL_BY_INDEX = [
+    "unknown",        # 0
+    "standing",       # 1
+    "sitting",        # 2
+    "lying",          # 3
+    "walking",        # 4
+    "climbing stairs",  # 5
+    "running",        # 6
+]
+
+# Column order for building model input tensor (must match HAR_IMU_INPUT_CHANNELS)
+IMU_COLUMNS = [
+    "acc_X", "acc_Y", "acc_Z",
+    "gyro_X", "gyro_Y", "gyro_Z",
+    "mag_X", "mag_Y", "mag_Z",
+]
+
+# Mock HAR labels - DB enum values (fallback when model not used)
 MOCK_HAR_LABELS = [
     "walking",
     "running",
@@ -22,6 +49,10 @@ MOCK_HAR_LABELS = [
 ]
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
+
+# Cached IMU model (lazy-loaded)
+_imu_model = None
+_imu_model_available = None
 
 
 async def get_imu_window(
@@ -55,6 +86,98 @@ async def get_imu_window(
     )
 
     return response.data if response.data else []
+
+
+def _imu_data_to_tensor(imu_data: list[dict]) -> np.ndarray:
+    """
+    Build a (1, window_size, input_dim) array from Supabase IMU list.
+    Truncates or zero-pads to HAR_IMU_WINDOW_SIZE; uses IMU_COLUMNS order.
+    """
+    n = len(imu_data)
+    out = np.zeros((1, HAR_IMU_WINDOW_SIZE, HAR_IMU_INPUT_CHANNELS), dtype=np.float32)
+    for i in range(min(n, HAR_IMU_WINDOW_SIZE)):
+        row = imu_data[i]
+        for j, col in enumerate(IMU_COLUMNS):
+            val = row.get(col)
+            out[0, i, j] = float(val) if val is not None else 0.0
+    return out
+
+
+def _resolve_checkpoint_path() -> Path | None:
+    """Resolve checkpoint path: try as given, then relative to imu_model_utils/ckpts."""
+    if not HAR_IMU_MODEL_CHECKPOINT:
+        return None
+    path = Path(HAR_IMU_MODEL_CHECKPOINT)
+    if path.is_file():
+        return path
+    # Resolve relative to this package so it works regardless of cwd (e.g. Celery worker)
+    ckpts_dir = Path(__file__).resolve().parent / "imu_model_utils" / "ckpts"
+    fallback = ckpts_dir / path.name
+    return fallback if fallback.is_file() else None
+
+
+def _get_imu_model():
+    """Load and cache IMU transformer model; returns (model, available)."""
+    global _imu_model, _imu_model_available
+    if _imu_model_available is not None:
+        return _imu_model, _imu_model_available
+    path = _resolve_checkpoint_path()
+    if path is None:
+        _imu_model_available = False
+        return None, False
+    try:
+        import torch
+        from src.celery_app.services.imu_model_utils.imu_transformer_encoder import (
+            IMUTransformerEncoder,
+        )
+        model = IMUTransformerEncoder(HAR_IMU_MODEL_CONFIG)
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        if isinstance(state, dict) and "model_state_dict" in state:
+            state = state["model_state_dict"]
+        elif isinstance(state, dict) and "state_dict" in state:
+            state = state["state_dict"]
+        model.load_state_dict(state, strict=True)
+        model.eval()
+        _imu_model = model
+        _imu_model_available = True
+        return _imu_model, True
+    except Exception:
+        _imu_model_available = False
+        return None, False
+
+
+def _run_imu_model_sync(imu_tensor: np.ndarray) -> tuple[int, float]:
+    """Run IMU model in sync context; returns (class_index, confidence)."""
+    import torch
+    model, available = _get_imu_model()
+    if not available or model is None:
+        raise RuntimeError("IMU model not available")
+    with torch.no_grad():
+        x = torch.from_numpy(imu_tensor)
+        batch = {"imu": x}
+        log_probs = model(batch)
+        probs = torch.exp(log_probs)
+        pred_idx = int(log_probs.argmax(dim=1).item())
+        confidence = float(probs[0, pred_idx].item())
+    return pred_idx, confidence
+
+
+async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
+    """
+    Run HAR model on IMU data. Uses IMU transformer when checkpoint is configured,
+    otherwise falls back to mock model.
+
+    Returns:
+        Tuple of (label, confidence, source) where source is "imu_model" or "mock_har".
+    """
+    model, available = _get_imu_model()
+    if available and model is not None and len(imu_data) >= 1:
+        tensor = _imu_data_to_tensor(imu_data)
+        pred_idx, confidence = await asyncio.to_thread(_run_imu_model_sync, tensor)
+        label = HAR_LABEL_BY_INDEX[pred_idx] if pred_idx < len(HAR_LABEL_BY_INDEX) else "unknown"
+        return label, round(confidence, 2), "imu_model"
+    label, confidence = await run_mock_har_model(imu_data)
+    return label, confidence, "mock_har"
 
 
 async def run_mock_har_model(imu_data: list[dict]) -> tuple[str, float]:
@@ -147,7 +270,7 @@ async def process_har_for_user(user: str, client: Client | None = None) -> HARLa
     Complete HAR processing pipeline for a single user.
 
     1. Fetch IMU data window
-    2. Run mock HAR model
+    2. Run HAR model (IMU transformer if checkpoint set, else mock)
     3. Insert result to database
 
     Args:
@@ -166,16 +289,16 @@ async def process_har_for_user(user: str, client: Client | None = None) -> HARLa
     if not imu_data:
         return None
 
-    # Run mock HAR model
-    label, confidence = await run_mock_har_model(imu_data)
+    # Run HAR model (IMU transformer if checkpoint set, else mock)
+    label, confidence, source = await run_har_model(imu_data)
 
     # Insert result
-    await insert_har_label(user, label, confidence, "mock_har", client)
+    await insert_har_label(user, label, confidence, source, client)
 
     return HARLabel(
         user=user,
         label=label,
         confidence=confidence,
         timestamp=datetime.now(CHINA_TZ),
-        source="mock_har",
+        source=source,
     )
