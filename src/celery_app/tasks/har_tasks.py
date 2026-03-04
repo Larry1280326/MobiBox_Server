@@ -113,7 +113,11 @@ def process_har_single(user: str) -> dict:
     return process_har_batch.delay([user])
 
 
-@celery_app.task(bind=True, rate_limit=HAR_TASK_RATE_LIMIT, name="process_har_periodic")
+@celery_app.task(
+    bind=True,
+    rate_limit=HAR_TASK_RATE_LIMIT,
+    name="src.celery_app.tasks.har_tasks.process_har_periodic",
+)
 def process_har_periodic(self) -> dict:
     """
     Periodic task to process HAR for all active users.

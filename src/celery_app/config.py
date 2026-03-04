@@ -44,7 +44,7 @@ HAR_IMU_MODEL_CONFIG = {
 # Beat schedule
 CELERY_BEAT_SCHEDULE = {
     "har-periodic": {
-        "task": "process_har_periodic",  # Must match the task name in @celery_app.task decorator
+        "task": "src.celery_app.tasks.har_tasks.process_har_periodic",  # Must match the task name in @celery_app.task decorator
         "schedule": 2.0,  # Every 2 seconds
     },
     "hourly-summary": {
