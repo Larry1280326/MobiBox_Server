@@ -1,8 +1,11 @@
 """
 LLM service utilities for Azure OpenAI integration.
 Provides reusable functions for text generation and structured output.
+Includes rate limiting to stay within Azure API limits (60 requests/minute).
 """
 
+import asyncio
+import time
 from typing import Type, TypeVar
 from pydantic import BaseModel
 from langchain_openai import AzureChatOpenAI
@@ -14,6 +17,35 @@ from src.config import get_llm_settings
 
 # Type variable for structured output models
 T = TypeVar("T", bound=BaseModel)
+
+
+class RateLimiter:
+    """
+    Token bucket rate limiter for Azure API calls.
+    Ensures requests stay within the specified rate limit.
+    """
+
+    def __init__(self, requests_per_minute: int = 60):
+        self.requests_per_minute = requests_per_minute
+        self.min_interval = 60.0 / requests_per_minute  # seconds between requests
+        self._lock = asyncio.Lock()
+        self._last_request_time: float = 0.0
+
+    async def acquire(self) -> None:
+        """Wait until a request can be made without exceeding rate limit."""
+        async with self._lock:
+            now = time.monotonic()
+            time_since_last = now - self._last_request_time
+
+            if time_since_last < self.min_interval:
+                wait_time = self.min_interval - time_since_last
+                await asyncio.sleep(wait_time)
+
+            self._last_request_time = time.monotonic()
+
+
+# Global rate limiter instance (60 requests per minute for Azure API)
+_azure_rate_limiter = RateLimiter(requests_per_minute=60)
 
 
 def get_llm(
@@ -70,6 +102,8 @@ async def query_llm(
     Returns:
         Generated text string
     """
+    await _azure_rate_limiter.acquire()
+
     llm = get_llm(
         model_type=model_type,
         api_version=api_version,
@@ -109,6 +143,8 @@ async def generate_structured_output(
     Returns:
         Instance of the output_schema Pydantic model
     """
+    await _azure_rate_limiter.acquire()
+
     llm = get_llm(
         model_type=model_type,
         api_version=api_version,
@@ -143,6 +179,7 @@ async def summarize_long_text(
     Summarize long text by chunking and combining results.
 
     Useful for processing documents longer than the context window.
+    Processes chunks sequentially to respect API rate limits.
 
     Args:
         content: Long text content to summarize
@@ -175,16 +212,19 @@ async def summarize_long_text(
 
     inputs = splitter.split_text(content)
 
-    # Process chunks in batch
-    generations = await chain.abatch([
-        {"content": chunk} for chunk in inputs
-    ])
+    # Process chunks sequentially to respect rate limits
+    generations = []
+    for chunk in inputs:
+        await _azure_rate_limiter.acquire()
+        result = await chain.ainvoke({"content": chunk})
+        generations.append(result)
 
     # Combine intermediate results and summarize again
-    intermediate_summary = " ".join([gen for gen in generations])
+    intermediate_summary = " ".join(generations)
 
     if len(inputs) > 1:
         # Final summarization pass
+        await _azure_rate_limiter.acquire()
         final_result = await chain.ainvoke({"content": intermediate_summary})
         return final_result
 

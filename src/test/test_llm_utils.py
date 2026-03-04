@@ -21,6 +21,14 @@ class SampleOutputSchema(BaseModel):
 
 
 @pytest.fixture
+def mock_rate_limiter():
+    """Mock rate limiter to bypass rate limiting in tests."""
+    with patch("src.llm_utils.services._azure_rate_limiter") as mock:
+        mock.acquire = AsyncMock()
+        yield mock
+
+
+@pytest.fixture
 def mock_llm_settings():
     """Mock LLM settings for testing."""
     with patch("src.llm_utils.services.get_llm_settings") as mock:
@@ -86,7 +94,7 @@ class TestQueryLlm:
     """Tests for query_llm function."""
 
     @pytest.mark.asyncio
-    async def test_query_llm_returns_result(self, mock_llm_settings, mock_azure_chat_openai):
+    async def test_query_llm_returns_result(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
         """query_llm returns the generated text."""
         mock_class, mock_instance = mock_azure_chat_openai
 
@@ -117,7 +125,7 @@ class TestQueryLlm:
         assert result == "Generated text result"
 
     @pytest.mark.asyncio
-    async def test_generate_text_with_custom_params(self, mock_llm_settings, mock_azure_chat_openai):
+    async def test_generate_text_with_custom_params(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
         """generate_text passes custom parameters to get_llm."""
         mock_class, mock_instance = mock_azure_chat_openai
 
@@ -148,7 +156,7 @@ class TestGenerateStructuredOutput:
     """Tests for generate_structured_output function."""
 
     @pytest.mark.asyncio
-    async def test_generate_structured_output_returns_schema(self, mock_llm_settings, mock_azure_chat_openai):
+    async def test_generate_structured_output_returns_schema(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
         """generate_structured_output returns structured Pydantic model."""
         mock_class, mock_instance = mock_azure_chat_openai
 
@@ -176,7 +184,7 @@ class TestGenerateStructuredOutput:
         assert result.content == "Test Content"
 
     @pytest.mark.asyncio
-    async def test_generate_structured_output_uses_schema(self, mock_llm_settings, mock_azure_chat_openai):
+    async def test_generate_structured_output_uses_schema(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
         """generate_structured_output calls with_structured_output with correct schema."""
         mock_class, mock_instance = mock_azure_chat_openai
 
@@ -205,7 +213,7 @@ class TestSummarizeLongText:
     """Tests for summarize_long_text function."""
 
     @pytest.mark.asyncio
-    async def test_summarize_short_text(self, mock_llm_settings, mock_azure_chat_openai):
+    async def test_summarize_short_text(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
         """summarize_long_text processes short text without chunking."""
         mock_class, mock_instance = mock_azure_chat_openai
 
@@ -213,7 +221,6 @@ class TestSummarizeLongText:
 
         mock_chain = MagicMock()
         mock_chain.ainvoke = AsyncMock(return_value="Summary result")
-        mock_chain.abatch = AsyncMock(return_value=["Summary result"])
 
         with patch("src.llm_utils.services.ChatPromptTemplate") as mock_prompt:
             mock_prompt_instance = MagicMock()
@@ -235,15 +242,15 @@ class TestSummarizeLongText:
         assert result == "Summary result"
 
     @pytest.mark.asyncio
-    async def test_summarize_long_text_chunks_content(self, mock_llm_settings, mock_azure_chat_openai):
-        """summarize_long_text splits long text into chunks and combines."""
+    async def test_summarize_long_text_chunks_content(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
+        """summarize_long_text splits long text into chunks and processes sequentially."""
         mock_class, mock_instance = mock_azure_chat_openai
 
         long_text = "Long content " * 500
 
         mock_chain = MagicMock()
-        mock_chain.ainvoke = AsyncMock(return_value="Final combined summary")
-        mock_chain.abatch = AsyncMock(return_value=["Chunk 1 summary", "Chunk 2 summary"])
+        # First two calls for chunks, third call for final summary
+        mock_chain.ainvoke = AsyncMock(side_effect=["Chunk 1 summary", "Chunk 2 summary", "Final combined summary"])
         mock_chain.__or__ = MagicMock(return_value=mock_chain)
 
         with patch("src.llm_utils.services.ChatPromptTemplate") as mock_prompt:
@@ -264,20 +271,17 @@ class TestSummarizeLongText:
                         chunk_overlap=100,
                     )
 
-        # Should call abatch for multiple chunks
-        mock_chain.abatch.assert_called_once()
-        # Should call ainvoke for final combination
-        mock_chain.ainvoke.assert_called_once()
+        # Should call ainvoke 3 times: twice for chunks + once for final summary
+        assert mock_chain.ainvoke.call_count == 3
         assert result == "Final combined summary"
 
     @pytest.mark.asyncio
-    async def test_summarize_uses_custom_params(self, mock_llm_settings, mock_azure_chat_openai):
+    async def test_summarize_uses_custom_params(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
         """summarize_long_text passes custom parameters."""
         mock_class, mock_instance = mock_azure_chat_openai
 
         mock_chain = MagicMock()
         mock_chain.ainvoke = AsyncMock(return_value="Summary")
-        mock_chain.abatch = AsyncMock(return_value=["Summary"])
 
         with patch("src.llm_utils.services.ChatPromptTemplate") as mock_prompt:
             mock_prompt_instance = MagicMock()

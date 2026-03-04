@@ -6,7 +6,6 @@ This module handles:
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
@@ -98,25 +97,12 @@ Return a JSON object with:
 - category: "physical", "mental", "social", or "digital_wellbeing"
 """
 
-    # Convert dicts/lists to JSON and escape curly braces for ChatPromptTemplate
-    def fmt(obj):
-        return json.dumps(obj).replace("{", "{{").replace("}", "}}")
+    # Escape curly braces in summary text for ChatPromptTemplate
+    summary_text = summary_log.get("summary", "No summary available").replace("{", "{{").replace("}", "}}")
 
     user_prompt = f"""User activity summary:
 
-Title: {summary_log.get('title', 'No title')}
-
-Summary: {summary_log.get('summary', 'No summary available')}
-
-Key Highlights: {fmt(summary_log.get('highlights', []))}
-
-Dominant Activities: {fmt(summary_log.get('dominant_activities', {}))}
-
-Activity Counts: {fmt(summary_log.get('activity_counts', {}))}
-
-Recommendations from summary: {fmt(summary_log.get('recommendations', []))}
-
-Period: {summary_log.get('period_hours', 1)} hour(s)
+{summary_text}
 
 Suggest an appropriate health intervention based on this summary."""
 
@@ -128,26 +114,21 @@ Suggest an appropriate health intervention based on this summary."""
             temperature=0.3,
         )
 
+        # Return only fields that match the database schema
         return {
             "user": user,
-            "intervention_type": result.intervention_type,
-            "message": result.message,
-            "priority": result.priority,
-            "category": result.category,
-            "based_on_data": summary_log.get("dominant_activities", {}),
-            "timestamp": datetime.now(CHINA_TZ).isoformat(),
+            "intervention_content": result.message,
+            "start_timestamp": summary_log.get("start_timestamp"),
+            "end_timestamp": summary_log.get("end_timestamp"),
         }
     except Exception as e:
         logger.error(f"Error generating intervention for user {user}: {e}")
-        # Fallback intervention
+        # Fallback intervention matching schema
         return {
             "user": user,
-            "intervention_type": "general_wellbeing",
-            "message": "Take a moment to check in with yourself. How are you feeling?",
-            "priority": "low",
-            "category": "mental",
-            "based_on_data": {},
-            "timestamp": datetime.now(CHINA_TZ).isoformat(),
+            "intervention_content": "Take a moment to check in with yourself. How are you feeling?",
+            "start_timestamp": summary_log.get("start_timestamp"),
+            "end_timestamp": summary_log.get("end_timestamp"),
         }
 
 

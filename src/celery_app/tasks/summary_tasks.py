@@ -76,17 +76,11 @@ def generate_hourly_interventions() -> dict:
                 intervention = await generate_intervention_from_summary(user, summary)
 
                 if intervention:
-                    # Link intervention to source summary
-                    intervention["summary_id"] = summary.get("id")
-
                     # Insert to database
                     await insert_intervention(intervention, client)
                     results["processed"] += 1
                     results["interventions"].append({
                         "user": user,
-                        "type": intervention.get("intervention_type"),
-                        "priority": intervention.get("priority"),
-                        "summary_id": summary.get("id"),
                     })
                 else:
                     results["skipped"] += 1
@@ -249,7 +243,6 @@ def trigger_intervention_for_user(user: str, hours: int = 1) -> dict:
 
         intervention = await generate_intervention_from_summary(user, summary)
         if intervention:
-            intervention["summary_id"] = summary.get("id")
             await insert_intervention(intervention, client)
 
         return intervention or {}

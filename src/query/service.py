@@ -111,7 +111,7 @@ def format_intervention(record: dict) -> dict:
     """
     return {
         "id": record.get("id"),
-        "intervention_content": record.get("message", ""),
+        "intervention_content": record.get("intervention_content", ""),
         "start_timestamp": record.get("start_timestamp"),
         "end_timestamp": record.get("end_timestamp"),
         "generation_timestamp": record.get("timestamp"),
