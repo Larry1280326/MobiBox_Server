@@ -63,3 +63,6 @@ dependencies:
     # HAR / IMU model (numpy required; torch for transformer when checkpoint set)
     - numpy
     - torch
+
+    # TSFM model dependencies
+    - sentence-transformers

@@ -24,7 +24,14 @@ ATOMIC_LOCATION_WINDOW_SECONDS = 120  # Window for location label (2 min)
 HAR_DEBOUNCE_SECONDS = 2  # Minimum time between HAR processing per user
 ATOMIC_DEBOUNCE_SECONDS = 5  # Minimum time between atomic processing per user
 
-# IMU HAR model (Transformer encoder); set to None to use mock
+# =============================================================================
+# TSFM Model Configuration (Time Series Foundation Model)
+# Zero-shot activity recognition with 87+ activity labels
+# =============================================================================
+USE_TSFM_MODEL = True  # Set to False to use legacy IMU transformer
+TSFM_MIN_SAMPLES = 10  # Minimum IMU samples required for TSFM inference
+
+# Legacy IMU HAR model (Transformer encoder); set to None to use mock
 HAR_IMU_MODEL_CHECKPOINT = "src/celery_app/services/imu_model_utils/ckpts/run_05_06_25_14_16_final_no_cycling_7_class8_25.pth"
 
 # IMU Transformer config (must match trained checkpoint)

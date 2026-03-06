@@ -36,7 +36,7 @@ def mock_llm_settings():
         settings.azure_openai_api_key = "test-api-key"
         settings.azure_openai_endpoint = "https://test.azure-api.net"
         settings.azure_openai_api_version = "2024-10-01-preview"
-        settings.azure_openai_deployment = "gpt-4o"
+        settings.azure_openai_deployment = "gpt-4o-mini"
         settings.default_temperature = 0.1
         mock.return_value = settings
         yield mock
@@ -62,7 +62,7 @@ class TestGetLlm:
 
         mock_class.assert_called_once()
         call_kwargs = mock_class.call_args.kwargs
-        assert call_kwargs["azure_deployment"] == "gpt-4o"
+        assert call_kwargs["azure_deployment"] == "gpt-4o-mini"
         assert call_kwargs["api_version"] == "2024-10-01-preview"
         assert call_kwargs["temperature"] == 0.1
         assert call_kwargs["api_key"] == "test-api-key"

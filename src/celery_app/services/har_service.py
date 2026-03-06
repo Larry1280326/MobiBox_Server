@@ -1,4 +1,8 @@
-"""Business logic for HAR (Human Activity Recognition) processing."""
+"""Business logic for HAR (Human Activity Recognition) processing.
+
+Uses TSFM (Time Series Foundation Model) for zero-shot activity recognition
+with fallback to legacy IMU transformer or mock model.
+"""
 
 import asyncio
 import logging
@@ -18,6 +22,8 @@ from src.celery_app.config import (
     HAR_IMU_INPUT_CHANNELS,
     HAR_IMU_MODEL_CHECKPOINT,
     HAR_IMU_MODEL_CONFIG,
+    USE_TSFM_MODEL,
+    TSFM_MIN_SAMPLES,
 )
 
 logger = logging.getLogger(__name__)
@@ -186,18 +192,42 @@ def _run_imu_model_sync(imu_tensor: np.ndarray) -> tuple[int, float]:
 
 async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
     """
-    Run HAR model on IMU data. Uses IMU transformer when checkpoint is configured,
-    otherwise falls back to mock model.
+    Run HAR model on IMU data.
+
+    Priority:
+    1. TSFM model (if USE_TSFM_MODEL=True and checkpoint available)
+    2. Legacy IMU transformer (if checkpoint configured)
+    3. Mock model (fallback)
 
     Returns:
-        Tuple of (label, confidence, source) where source is "imu_model" or "mock_har".
+        Tuple of (label, confidence, source) where source is "tsfm_model", "imu_model", or "mock_har".
     """
+    # Check minimum samples
+    if len(imu_data) < 1:
+        return "unknown", 0.5, "insufficient_data"
+
+    # Try TSFM model first (if enabled)
+    if USE_TSFM_MODEL:
+        try:
+            from .tsfm_service import run_tsfm_inference, is_tsfm_available
+
+            if is_tsfm_available() and len(imu_data) >= TSFM_MIN_SAMPLES:
+                label, confidence, source = await asyncio.to_thread(
+                    run_tsfm_inference, imu_data
+                )
+                return label, confidence, source
+        except Exception as e:
+            logger.warning(f"TSFM model failed, falling back to legacy: {e}")
+
+    # Fall back to legacy IMU transformer
     model, available = _get_imu_model()
-    if available and model is not None and len(imu_data) >= 1:
+    if available and model is not None:
         tensor = _imu_data_to_tensor(imu_data)
         pred_idx, confidence = await asyncio.to_thread(_run_imu_model_sync, tensor)
         label = HAR_LABEL_BY_INDEX[pred_idx] if pred_idx < len(HAR_LABEL_BY_INDEX) else "unknown"
         return label, round(confidence, 2), "imu_model"
+
+    # Final fallback to mock model
     label, confidence = await run_mock_har_model(imu_data)
     return label, confidence, "mock_har"
 

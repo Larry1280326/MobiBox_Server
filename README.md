@@ -21,21 +21,42 @@ cp .env.example .env
 # Edit .env with your credentials (see Configuration section below)
 ```
 
-### 3. Start Infrastructure Services
+### 3. Start All Services (Recommended)
+
+Use the provided startup scripts to manage all services:
+
+```bash
+# Start all services (RabbitMQ, FastAPI, Celery worker, Celery beat)
+./scripts/start_services.sh
+
+# Check service status
+./scripts/status.sh
+
+# Stop all services
+./scripts/stop_services.sh
+
+# Restart all services
+./scripts/restart_services.sh
+```
+
+### 4. Verify Services
+
+```bash
+# Check API health
+curl http://localhost:8000/health
+
+# Check all service statuses
+./scripts/status.sh
+```
+
+### Manual Start (Alternative)
+
+If you prefer to start services manually:
 
 ```bash
 # Start RabbitMQ (required for Celery)
-docker run -d --name rabbitmq -p 5672:5672 rabbitmq
+docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 
-# Verify RabbitMQ is running
-docker ps | grep rabbitmq
-```
-
-### 4. Start the Application
-
-Open separate terminals for each service:
-
-```bash
 # Terminal 1: FastAPI Server
 conda activate Mobibox_backend
 uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
@@ -47,16 +68,6 @@ celery -A src.celery_app.celery_app worker --loglevel=info
 # Terminal 3: Celery Beat (for scheduled tasks - optional)
 conda activate Mobibox_backend
 celery -A src.celery_app.celery_app beat --loglevel=info
-```
-
-### 5. Verify Services
-
-```bash
-# Check API health
-curl http://localhost:8000/health
-
-# Check Celery worker status
-celery -A src.celery_app.celery_app inspect active
 ```
 
 ---
@@ -102,7 +113,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here  # Optional, for admin oper
 AZURE_OPENAI_API_KEY=your-api-key-here
 AZURE_OPENAI_ENDPOINT=https://hkust.azure-api.net
 AZURE_OPENAI_API_VERSION=2024-10-01-preview
-AZURE_OPENAI_DEPLOYMENT=gpt-4o
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
 DEFAULT_TEMPERATURE=0.1
 ```
 
@@ -521,6 +532,17 @@ MobiBox_server/
 ├── environment.yml           # Conda environment configuration
 ├── .env.example              # Example environment variables
 ├── README.md                 # This file
+├── scripts/                  # Service management scripts
+│   ├── start_services.sh    # Start all services
+│   ├── stop_services.sh     # Stop all services
+│   ├── restart_services.sh  # Restart all services
+│   └── status.sh            # Check service status
+├── logs/                     # Service logs (created at runtime)
+│   ├── api.log              # FastAPI logs
+│   ├── celery_worker.log    # Celery worker logs
+│   └── celery_beat.log      # Celery beat logs
+├── docs/                     # Documentation
+│   └── TSFM_INTEGRATION.md  # TSFM model documentation
 ├── src/
 │   ├── __init__.py
 │   ├── main.py              # FastAPI application entry point
@@ -549,7 +571,23 @@ MobiBox_server/
 │   │   ├── services/        # Business logic
 │   │   │   ├── har_service.py
 │   │   │   ├── atomic_service.py
-│   │   │   └── summary_service.py
+│   │   │   ├── summary_service.py
+│   │   │   ├── tsfm_service.py         # TSFM model wrapper
+│   │   │   └── tsfm_model/             # TSFM model code
+│   │   │       ├── __init__.py
+│   │   │       ├── config.py
+│   │   │       ├── encoder.py
+│   │   │       ├── semantic_alignment.py
+│   │   │       ├── token_text_encoder.py
+│   │   │       ├── feature_extractor.py
+│   │   │       ├── transformer.py
+│   │   │       ├── positional_encoding.py
+│   │   │       ├── preprocessing.py
+│   │   │       ├── label_groups.py
+│   │   │       ├── model_loading.py
+│   │   │       └── ckpts/              # Model checkpoints
+│   │   │           ├── best.pt
+│   │   │           └── hyperparameters.json
 │   │   ├── schemas/         # Pydantic schemas
 │   │   │   ├── har_schemas.py
 │   │   │   └── atomic_schemas.py
@@ -570,6 +608,7 @@ MobiBox_server/
 │       ├── test_celery_services.py # Celery service tests
 │       ├── test_celery_tasks.py # Celery task tests
 │       ├── test_query.py    # Query endpoint tests
+│       ├── test_tsfm.py     # TSFM model tests
 │       └── test_intervention_pipeline_integration.py # Intervention pipeline tests
 └── .gitignore
 ```
@@ -691,3 +730,122 @@ celery -A src.celery_app.celery_app call process_har_batch --args='["user1"]'
 ```
 
 For detailed Celery documentation, see [src/celery_app/README.md](src/celery_app/README.md).
+
+## TSFM Model Integration
+
+The backend uses a TSFM (Time Series Foundation Model) for Human Activity Recognition (HAR). The model is a semantic-aligned encoder trained on UCI-HAR dataset with zero-shot capability.
+
+### Model Details
+
+| Property | Value |
+|----------|-------|
+| Architecture | Semantic-aligned encoder with contrastive learning |
+| Training Data | UCI-HAR dataset (6 activities) |
+| Input | 9-channel IMU data (accelerometer, gyroscope, magnetometer) |
+| Labels | walking, walking_upstairs, walking_downstairs, sitting, standing, laying |
+| Checkpoint | `src/celery_app/services/tsfm_model/ckpts/best.pt` |
+
+### Label Mapping
+
+TSFM labels are mapped to MobiBox activity labels:
+
+| TSFM Label | MobiBox Label |
+|------------|---------------|
+| walking | walking |
+| walking_upstairs | climbing stairs |
+| walking_downstairs | climbing stairs |
+| sitting | sitting |
+| standing | standing |
+| laying | lying |
+
+### Setup
+
+1. **Download the checkpoint** from remote server:
+   ```bash
+   # Create checkpoint directory
+   mkdir -p src/celery_app/services/tsfm_model/ckpts
+
+   # Download checkpoint and hyperparameters
+   scp user@server:/path/to/best.pt src/celery_app/services/tsfm_model/ckpts/
+   scp user@server:/path/to/hyperparameters.json src/celery_app/services/tsfm_model/ckpts/
+   ```
+
+2. **Verify the model loads correctly**:
+   ```bash
+   python -c "from src.celery_app.services.tsfm_service import _get_tsfm_model; model, _, available = _get_tsfm_model(); print(f'TSFM available: {available}')"
+   ```
+
+### Testing
+
+Run TSFM-specific tests:
+```bash
+# Run all TSFM tests
+pytest src/test/test_tsfm.py -v
+
+# Run specific test categories
+pytest src/test/test_tsfm.py::TestTSFMPreprocessing -v
+pytest src/test/test_tsfm.py::TestTSFMLabelMapping -v
+pytest src/test/test_tsfm.py::TestTSFMInference -v
+pytest src/test/test_tsfm.py::TestTSFMBatchInference -v
+```
+
+### Inference Flow
+
+```
+IMU Data (N samples × 9 channels)
+        ↓
+    Preprocessing
+  (patching, normalization)
+        ↓
+    TSFM Encoder
+  (semantic embeddings)
+        ↓
+  Cosine Similarity
+  (with label embeddings)
+        ↓
+    Activity Label
+```
+
+For detailed TSFM documentation, see [docs/TSFM_INTEGRATION.md](docs/TSFM_INTEGRATION.md).
+
+## Service Management Scripts
+
+The `scripts/` directory contains utilities for managing services:
+
+| Script | Description |
+|--------|-------------|
+| `start_services.sh` | Start all services (RabbitMQ, FastAPI, Celery worker/beat) |
+| `stop_services.sh` | Stop all running services |
+| `restart_services.sh` | Restart all services |
+| `status.sh` | Check status of all services |
+
+### Usage
+
+```bash
+# Start all services
+./scripts/start_services.sh
+
+# Check service status
+./scripts/status.sh
+
+# Stop all services (will prompt to stop RabbitMQ)
+./scripts/stop_services.sh
+
+# Restart all services
+./scripts/restart_services.sh
+```
+
+### Logs
+
+Service logs are stored in the `logs/` directory:
+- `logs/api.log` - FastAPI server logs
+- `logs/celery_worker.log` - Celery worker logs
+- `logs/celery_beat.log` - Celery beat scheduler logs
+
+```bash
+# View API logs
+tail -f logs/api.log
+
+# View Celery worker logs
+tail -f logs/celery_worker.log
+```
