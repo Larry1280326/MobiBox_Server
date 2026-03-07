@@ -58,7 +58,7 @@ def pytest_collection_modifyitems(config, items):
                 if not has_llm_api_key:
                     skip_reason = "LLM API credentials not available (set OPENROUTER_API_KEY in .env)"
                     item.add_marker(pytest.mark.skip(reason=skip_reason))
-            elif "test_archive_service_integration" in str(item.fspath):
+            elif "test_archive_service_integration" in str(item.fspath) or "test_archive_storage_integration" in str(item.fspath):
                 if not has_supabase_creds:
                     skip_reason = "Supabase credentials not available (set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env)"
                     item.add_marker(pytest.mark.skip(reason=skip_reason))
