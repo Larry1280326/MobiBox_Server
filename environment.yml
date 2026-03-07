@@ -66,3 +66,6 @@ dependencies:
 
     # TSFM model dependencies
     - sentence-transformers
+
+    # Data archival (Parquet format)
+    - pyarrow  # For efficient Parquet storage (~10-100x compression vs CSV)
