@@ -30,7 +30,7 @@ fi
 
 # Activate conda environment
 echo -e "${YELLOW}Activating conda environment...${NC}"
-eval "$(conda shell.bash.sh hook)"
+eval "$(conda shell.bash hook)"
 conda activate Mobibox_backend 2>/dev/null || {
     echo -e "${RED}Error: Failed to activate conda environment 'Mobibox_backend'${NC}"
     echo -e "${YELLOW}Make sure you've created the environment:${NC}"
