@@ -451,13 +451,17 @@ async def generate_summary_for_user(
     if log_type == "hourly":
         is_ready, reason = await check_user_hourly_ready(user, client)
         if not is_ready:
-            logger.debug(f"User {user} not ready for hourly summary: {reason}")
+            logger.info(f"Skipping {user}: {reason}")
             return None
 
     # Check threshold
     has_enough, compressed = await should_generate_summary(user, hours, client)
     if not has_enough:
-        logger.debug(f"User {user} doesn't meet threshold for summary generation")
+        total_records = compressed.get("total_records", 0)
+        logger.info(
+            f"Skipping {user}: insufficient data "
+            f"(records={total_records}, need={MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG})"
+        )
         return None
 
     # Generate summary
@@ -470,6 +474,7 @@ async def generate_summary_for_user(
         # Update last summary generated timestamp
         await update_last_summary_generated(user, client)
 
+        logger.info(f"Generated {log_type} summary for {user}")
         return summary_log
 
     return None
