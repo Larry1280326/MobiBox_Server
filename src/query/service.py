@@ -15,6 +15,7 @@ from src.query.constants import (
     SUMMARY_LOG_FEEDBACKS_TABLE,
     ATOMIC_ACTIVITIES_TABLE,
 )
+from src.query.atomic_encoding import encode_atomic_activities
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -321,3 +322,44 @@ async def get_atomic_activities(
         "stepCategory": step_labels,
         "phoneCategory": phone_usages,
     }
+
+
+async def get_atomic_activities_encoded(
+    user: str,
+    duration: int,
+    client: Client | None = None,
+) -> dict:
+    """
+    Fetch atomic activities for a user and encode them into Level-1 and Level-2 formats.
+
+    Args:
+        user: User identifier
+        duration: Duration in seconds since last fetch (0 for all)
+        client: Optional Supabase client
+
+    Returns:
+        Dictionary with encoded atomic activity data including:
+        - window_meta: Duration and token minutes
+        - level2_compact_view: Aggregated statistics
+        - level1_temporal_view: Timeline and RLE encoding
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    # Build query
+    query = client.table(ATOMIC_ACTIVITIES_TABLE).select("*").eq("user", user)
+
+    # Apply time filter if duration > 0
+    if duration > 0:
+        cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=duration)
+        query = query.gte("timestamp", cutoff_time.isoformat())
+
+    # Order by timestamp ascending
+    query = query.order("timestamp", desc=False)
+
+    response = await asyncio.to_thread(lambda: query.execute())
+
+    if not response.data:
+        return encode_atomic_activities([])
+
+    return encode_atomic_activities(response.data)

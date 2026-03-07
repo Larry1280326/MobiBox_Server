@@ -164,3 +164,49 @@ class AtomicActivitiesResponse(BaseModel):
 
     status: str = "success"
     data: Optional[AtomicActivitiesData] = Field(None, description="Compressed atomic activities data")
+
+
+# ============================================================================
+# Encoded Atomic Activities Schemas
+# ============================================================================
+
+
+class WindowMeta(BaseModel):
+    """Window metadata for atomic activities encoding."""
+
+    duration_min: float = Field(..., description="Total duration in minutes")
+    token_minutes: float = Field(1.0, description="Token size in minutes")
+
+
+class Level2CompactView(BaseModel):
+    """Level-2 compact view with aggregated statistics."""
+
+    activity_top: List[List] = Field(default_factory=list, description="Top activities with duration")
+    place_top: List[List] = Field(default_factory=list, description="Top places with duration")
+    steps_distribution: List[List] = Field(default_factory=list, description="Steps distribution")
+    movement_distribution: List[List] = Field(default_factory=list, description="Movement distribution")
+    phone_distribution: List[List] = Field(default_factory=list, description="Phone usage distribution")
+    app_top: List[List] = Field(default_factory=list, description="Top apps with duration")
+
+
+class Level1TemporalView(BaseModel):
+    """Level-1 temporal view with timeline encoding."""
+
+    timeline_compact: List[str] = Field(default_factory=list, description="Compact timeline per dimension")
+    macro_timeline: List[str] = Field(default_factory=list, description="Human-readable timeline slots")
+    rle_exact_compact: dict = Field(default_factory=dict, description="Run-length encoding per dimension")
+
+
+class EncodedAtomicActivitiesData(BaseModel):
+    """Encoded atomic activities data with Level-1 and Level-2 views."""
+
+    window_meta: WindowMeta = Field(..., description="Window metadata")
+    level2_compact_view: Level2CompactView = Field(..., description="Level-2 aggregated statistics")
+    level1_temporal_view: Level1TemporalView = Field(..., description="Level-1 temporal encoding")
+
+
+class EncodedAtomicActivitiesResponse(BaseModel):
+    """Response model for encoded atomic activities."""
+
+    status: str = "success"
+    data: Optional[EncodedAtomicActivitiesData] = Field(None, description="Encoded atomic activities data")
