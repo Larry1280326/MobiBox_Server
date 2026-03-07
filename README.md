@@ -296,6 +296,7 @@ celery -A src.celery_app.celery_app beat --loglevel=info
 | `generate_hourly_interventions` | Every hour | Generate health interventions |
 | `generate_hourly_summary` | Every hour | Generate hourly activity summary |
 | `generate_daily_summary` | Daily at midnight | Generate daily activity summary |
+| `archive_data_periodic` | Daily at 3 AM | Archive old data to storage |
 
 ### Running Multiple Services Together
 
@@ -552,8 +553,11 @@ MobiBox_server/
 │   ├── api.log              # FastAPI logs
 │   ├── celery_worker.log    # Celery worker logs
 │   └── celery_beat.log      # Celery beat logs
-├── migrations/               # Database migrations (new)
-│   └── 002_add_missing_features_tables.sql
+├── migrations/               # Database migrations
+│   ├── 002_add_missing_features_tables.sql
+│   ├── 003_database_improvements.sql
+│   ├── 004_add_log_feedback_fields.sql
+│   └── 005_storage_archival.sql
 ├── docs/                     # Documentation
 │   └── TSFM_INTEGRATION.md  # TSFM model documentation
 ├── src/
@@ -580,13 +584,15 @@ MobiBox_server/
 │   │   ├── tasks/           # Celery task modules
 │   │   │   ├── har_tasks.py
 │   │   │   ├── atomic_tasks.py
-│   │   │   └── summary_tasks.py
+│   │   │   ├── summary_tasks.py
+│   │   │   └── archive_tasks.py    # Data archival tasks (new)
 │   │   ├── services/        # Business logic
 │   │   │   ├── har_service.py
 │   │   │   ├── atomic_service.py
 │   │   │   ├── summary_service.py
 │   │   │   ├── app_category_service.py  # App category lookup (new)
 │   │   │   ├── processing_state_service.py  # User state tracking (new)
+│   │   │   ├── archive_service.py     # Data archival service (new)
 │   │   │   ├── intervention_service.py
 │   │   │   ├── tsfm_service.py         # TSFM model wrapper
 │   │   │   └── tsfm_model/             # TSFM model code
@@ -651,6 +657,7 @@ MobiBox_server/
 | isort | Import sorter |
 | flake8 | Style guide enforcement |
 | mypy | Static type checker |
+| pyarrow | Parquet file format for data archival |
 
 ## Database Schema
 
@@ -1003,6 +1010,12 @@ psql -f migrations/002_add_missing_features_tables.sql
 
 # Migration 003: Database improvements (indexes, constraints, triggers)
 psql -f migrations/003_database_improvements.sql
+
+# Migration 004: Add log feedback fields
+psql -f migrations/004_add_log_feedback_fields.sql
+
+# Migration 005: Storage archival setup
+psql -f migrations/005_storage_archival.sql
 ```
 
 ### Migration 002: New Tables
@@ -1145,6 +1158,211 @@ FROM user_processing_state
 WHERE data_collection_start IS NOT NULL
   AND hours_since_start >= 1
   AND (last_summary_generated IS NULL OR hours_since_last_summary >= 1);
+```
+
+---
+
+## Data Archival System
+
+The system automatically archives old data to Supabase Storage to reduce database size and costs. Archived data is stored in **Parquet format with Snappy compression**, achieving **10-100x compression** compared to CSV.
+
+### Overview
+
+| Component | Purpose |
+|------------|---------|
+| Archive Service | Exports old records to Parquet files |
+| Celery Beat | Schedules daily archival at 3 AM |
+| Storage Bucket | Holds archived Parquet files |
+| Archival Logs | Audit trail of all archival operations |
+
+### Storage Format
+
+Archives are stored as Parquet files with Snappy compression:
+
+```
+mobibox-archive/
+└── archives/
+    ├── imu/
+    │   └── 2026/
+    │       └── 03/
+    │           └── 2026-03-01.parquet
+    ├── har/
+    │   └── 2026/
+    │       └── 03/
+    │           └── 2026-03-01.parquet
+    └── atomic_activities/
+        └── ...
+```
+
+**Benefits of Parquet:**
+- **10-100x smaller** than CSV (columnar + dictionary encoding)
+- **Type preservation** (timestamps, numbers remain typed)
+- **Query optimization** (built-in statistics)
+- **Industry standard** for data lakes and analytics
+
+### Retention Policy
+
+| Table | Retention | Reason |
+|-------|------------|--------|
+| `imu` | 7 days | Highest volume sensor data |
+| `har` | 30 days | Derived from IMU, lower volume |
+| `atomic_activities` | 30 days | Activity summaries |
+| `uploads` | 30 days | Document uploads |
+| `summary_logs` | 90 days | Important user summaries |
+| `interventions` | 90 days | Health interventions |
+
+### Configuration
+
+Add to `.env`:
+
+```env
+# Storage bucket name (create in Supabase dashboard)
+STORAGE_BUCKET=mobibox-archive
+
+# Retention days (optional, defaults shown)
+RETENTION_IMU_DAYS=7
+RETENTION_HAR_DAYS=30
+RETENTION_ATOMIC_DAYS=30
+RETENTION_UPLOADS_DAYS=30
+RETENTION_SUMMARY_LOGS_DAYS=90
+RETENTION_INTERVENTIONS_DAYS=90
+
+# Archival settings
+ARCHIVE_ENABLED=true
+ARCHIVE_BATCH_SIZE=10000
+```
+
+### Setup
+
+#### 1. Create Storage Bucket
+
+In Supabase Dashboard:
+1. Go to **Storage** → **Create a new bucket**
+2. Name: `mobibox-archive`
+3. Public: **No** (private bucket)
+
+Or via SQL:
+```sql
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('mobibox-archive', 'mobibox-archive', false)
+ON CONFLICT (id) DO NOTHING;
+```
+
+#### 2. Add Service Role Key
+
+The archival service needs admin access to storage:
+
+```env
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIs...
+```
+
+Get this from **Project Settings → API → service_role** (keep secret!).
+
+#### 3. Run Migration
+
+```sql
+-- Migration 005: Create archival_logs table
+\i migrations/005_storage_archival.sql
+```
+
+#### 4. Install PyArrow
+
+```bash
+conda activate Mobibox_backend
+conda install -c conda-forge pyarrow
+# or
+pip install pyarrow
+```
+
+### Manual Archival
+
+Trigger archival manually:
+
+```bash
+# Archive all tables
+celery -A src.celery_app.celery_app call archive_data_periodic
+
+# Archive specific table
+celery -A src.celery_app.celery_app call archive_table_manual --args='["imu", 7]'
+
+# Check archive statistics
+celery -A src.celery_app.celery_app call get_archive_stats
+```
+
+### Monitoring
+
+#### Check Archival Logs
+
+```sql
+-- Recent archival operations
+SELECT * FROM v_archival_history;
+
+-- Recent failures
+SELECT * FROM v_recent_archival_failures;
+
+-- Storage efficiency over time
+SELECT
+    table_name,
+    archival_timestamp,
+    records_archived,
+    file_size_bytes,
+    ROUND(file_size_bytes::numeric / NULLIF(records_archived, 0), 2) as bytes_per_record
+FROM archival_logs
+WHERE status = 'completed'
+ORDER BY archival_timestamp DESC
+LIMIT 20;
+```
+
+#### Storage Efficiency
+
+```sql
+-- Average bytes per record by table
+SELECT
+    table_name,
+    COUNT(*) as archive_count,
+    SUM(records_archived) as total_records,
+    SUM(file_size_bytes) as total_bytes,
+    ROUND(SUM(file_size_bytes)::numeric / NULLIF(SUM(records_archived), 0), 2) as avg_bytes_per_record,
+    pg_size_pretty(SUM(file_size_bytes)) as total_size
+FROM archival_logs
+WHERE status = 'completed'
+GROUP BY table_name;
+```
+
+### Restoring Data
+
+To restore archived data:
+
+```python
+import pandas as pd
+from supabase import create_client
+
+# Download Parquet file
+supabase = create_client(url, service_role_key)
+response = supabase.storage.from_('mobibox-archive').download('archives/imu/2026/03/2026-03-01.parquet')
+
+# Read Parquet
+df = pd.read_parquet(io.BytesIO(response))
+
+# Insert back to database
+# ... (your restore logic)
+```
+
+### Archival Logs Table
+
+```sql
+CREATE TABLE archival_logs (
+    id SERIAL PRIMARY KEY,
+    table_name VARCHAR(100) NOT NULL,
+    records_archived INTEGER DEFAULT 0,
+    records_deleted INTEGER DEFAULT 0,
+    storage_path VARCHAR(500),
+    file_size_bytes BIGINT,  -- Parquet file size
+    archival_timestamp TIMESTAMPTZ DEFAULT NOW(),
+    status VARCHAR(20),  -- 'completed', 'failed', 'partial'
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
 ```
 
 ---
