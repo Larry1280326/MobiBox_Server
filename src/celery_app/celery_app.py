@@ -29,7 +29,7 @@ celery_app.conf.update(
     enable_utc=False,
     # Worker settings
     worker_prefetch_multiplier=1,  # Only fetch one task at a time per worker
-    worker_concurrency=4,  # Number of concurrent worker processes
+    worker_concurrency=1,  # Number of concurrent worker processes (reduced for ML model memory)
     # Task result settings
     result_expires=3600,  # Results expire after 1 hour
     # Beat schedule
