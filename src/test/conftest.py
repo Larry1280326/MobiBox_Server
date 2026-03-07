@@ -41,17 +41,27 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip integration tests if LLM API credentials are not available."""
-    skip_reason = "LLM API credentials not available (set OPENROUTER_API_KEY in .env)"
-
+    """Skip integration tests if required credentials are not available."""
     # Check if OpenRouter API key is available
-    has_api_key = bool(os.getenv("OPENROUTER_API_KEY"))
+    has_llm_api_key = bool(os.getenv("OPENROUTER_API_KEY"))
 
-    if not has_api_key:
-        skip_marker = pytest.mark.skip(reason=skip_reason)
-        for item in items:
-            if "integration" in item.keywords:
-                item.add_marker(skip_marker)
+    # Check if Supabase credentials are available
+    has_supabase_creds = bool(
+        os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    )
+
+    for item in items:
+        # Skip LLM integration tests without API key
+        if "integration" in item.keywords:
+            # Check file name to determine which credentials are needed
+            if "test_llm_integration" in str(item.fspath):
+                if not has_llm_api_key:
+                    skip_reason = "LLM API credentials not available (set OPENROUTER_API_KEY in .env)"
+                    item.add_marker(pytest.mark.skip(reason=skip_reason))
+            elif "test_archive_service_integration" in str(item.fspath):
+                if not has_supabase_creds:
+                    skip_reason = "Supabase credentials not available (set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env)"
+                    item.add_marker(pytest.mark.skip(reason=skip_reason))
 
 
 @pytest.fixture
