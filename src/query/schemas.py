@@ -112,7 +112,7 @@ class SummaryLogFeedbackRequest(BaseModel):
     Supports both simple text feedback and structured feedback with Q1-Q4.
     """
 
-    user: int = Field(..., description="User ID")
+    user: str = Field(..., min_length=1, description="User identifier")
     summary_logs_id: int = Field(..., description="ID of the summary log being rated")
     # Simple feedback (for basic use cases)
     feedback: Optional[str] = Field(None, description="Simple feedback text")

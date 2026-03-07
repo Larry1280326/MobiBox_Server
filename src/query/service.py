@@ -190,7 +190,7 @@ async def submit_intervention_feedback(
 
 
 async def submit_summary_log_feedback(
-    user: int,
+    user: str,
     summary_logs_id: int,
     feedback: Optional[str] = None,
     q1: Optional[str] = None,
@@ -205,7 +205,7 @@ async def submit_summary_log_feedback(
     Submit summary log feedback to the database.
 
     Args:
-        user: User ID
+        user: User identifier (string)
         summary_logs_id: ID of the summary log being rated
         feedback: Simple feedback text (for basic use cases)
         q1: Multiple choice answer for question 1

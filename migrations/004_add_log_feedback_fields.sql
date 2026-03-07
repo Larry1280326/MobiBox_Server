@@ -22,7 +22,15 @@ ALTER TABLE public.summary_log_feedbacks
 ADD COLUMN IF NOT EXISTS suggestions TEXT;
 
 -- =============================================================================
--- 2. Add comments for documentation
+-- 2. Ensure user column can store string identifiers
+-- =============================================================================
+
+-- Alter user column to TEXT if it was INTEGER (for string user IDs like "samsumg_test")
+ALTER TABLE public.summary_log_feedbacks
+ALTER COLUMN "user" TYPE TEXT;
+
+-- =============================================================================
+-- 3. Add comments for documentation
 -- =============================================================================
 
 COMMENT ON COLUMN public.summary_log_feedbacks.feedback IS 'General feedback text (for simple feedback)';
@@ -34,14 +42,14 @@ COMMENT ON COLUMN public.summary_log_feedbacks.ground_truth IS 'Standard answer 
 COMMENT ON COLUMN public.summary_log_feedbacks.suggestions IS 'Optimization suggestions from user';
 
 -- =============================================================================
--- 3. Create index for querying by summary_logs_id
+-- 4. Create index for querying by summary_logs_id
 -- =============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_summary_log_feedbacks_summary_logs_id
 ON public.summary_log_feedbacks(summary_logs_id);
 
 -- =============================================================================
--- 4. Note: feedback column remains as optional for simple feedback use cases
+-- 5. Note: feedback column remains as optional for simple feedback use cases
 -- =============================================================================
 
 -- The feedback column is already nullable and can be used for simple text feedback
