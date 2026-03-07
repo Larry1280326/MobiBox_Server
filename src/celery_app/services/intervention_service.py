@@ -122,7 +122,19 @@ Suggest an appropriate health intervention based on this summary."""
             "end_timestamp": summary_log.get("end_timestamp"),
         }
     except Exception as e:
-        logger.error(f"Error generating intervention for user {user}: {e}")
+        logger.error(f"Error generating intervention for user {user}: {e}", exc_info=True)
+
+        # Check if LLM is properly configured
+        from src.config import get_llm_settings
+        try:
+            settings = get_llm_settings()
+            if not settings.azure_openai_api_key:
+                logger.error("AZURE_OPENAI_API_KEY is not set - LLM interventions will use fallback")
+            if not settings.azure_openai_endpoint:
+                logger.error("AZURE_OPENAI_ENDPOINT is not set - LLM interventions will use fallback")
+        except Exception as config_error:
+            logger.error(f"Error checking LLM config: {config_error}")
+
         # Fallback intervention matching schema
         return {
             "user": user,

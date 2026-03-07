@@ -107,11 +107,22 @@ class InterventionFeedbackResponse(BaseModel):
 
 
 class SummaryLogFeedbackRequest(BaseModel):
-    """Request model for submitting summary log feedback."""
+    """Request model for submitting summary log feedback.
+
+    Supports both simple text feedback and structured feedback with Q1-Q4.
+    """
 
     user: int = Field(..., description="User ID")
     summary_logs_id: int = Field(..., description="ID of the summary log being rated")
-    feedback: Optional[str] = Field(None, description="Feedback text")
+    # Simple feedback (for basic use cases)
+    feedback: Optional[str] = Field(None, description="Simple feedback text")
+    # Structured feedback (for detailed feedback)
+    q1: Optional[str] = Field(None, description="Multiple choice answer for question 1")
+    q2: Optional[str] = Field(None, description="Multiple choice answer for question 2")
+    q3: Optional[str] = Field(None, description="Multiple choice answer for question 3")
+    q4: Optional[str] = Field(None, description="Multiple choice answer for question 4")
+    ground_truth: Optional[str] = Field(None, description="Standard answer provided by user")
+    suggestions: Optional[str] = Field(None, description="Optimization suggestions from user")
 
 
 class SummaryLogFeedbackResponse(BaseModel):

@@ -193,6 +193,12 @@ async def submit_summary_log_feedback(
     user: int,
     summary_logs_id: int,
     feedback: Optional[str] = None,
+    q1: Optional[str] = None,
+    q2: Optional[str] = None,
+    q3: Optional[str] = None,
+    q4: Optional[str] = None,
+    ground_truth: Optional[str] = None,
+    suggestions: Optional[str] = None,
     client: Client | None = None,
 ) -> dict:
     """
@@ -201,7 +207,13 @@ async def submit_summary_log_feedback(
     Args:
         user: User ID
         summary_logs_id: ID of the summary log being rated
-        feedback: Optional feedback text
+        feedback: Simple feedback text (for basic use cases)
+        q1: Multiple choice answer for question 1
+        q2: Multiple choice answer for question 2
+        q3: Multiple choice answer for question 3
+        q4: Multiple choice answer for question 4
+        ground_truth: Standard answer provided by user
+        suggestions: Optimization suggestions from user
         client: Optional Supabase client
 
     Returns:
@@ -214,6 +226,12 @@ async def submit_summary_log_feedback(
         "user": user,
         "summary_logs_id": summary_logs_id,
         "feedback": feedback,
+        "q1": q1,
+        "q2": q2,
+        "q3": q3,
+        "q4": q4,
+        "ground_truth": ground_truth,
+        "suggestions": suggestions,
     }
 
     response = await asyncio.to_thread(
