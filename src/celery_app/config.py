@@ -84,7 +84,7 @@ CELERY_BEAT_SCHEDULE = {
 
 # Minimum data required before generating a summary log
 # TEMPORARILY REDUCED FOR TESTING - restore to original values after testing
-MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG = 10  # At least 10 atomic records (was: 60)
+MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG = 1  # At least 1 atomic records (was: 60)
 MIN_UNIQUE_LABELS_FOR_LOG = 1  # At least 1 unique activity type (was: 3)
 
 # Per-user hourly timer settings
