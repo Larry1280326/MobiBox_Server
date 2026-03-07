@@ -385,6 +385,8 @@ celery -A src.celery_app.celery_app inspect registered
 | LLM errors | Verify `OPENROUTER_API_KEY` in `.env` |
 | Supabase connection errors | Verify `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.env` |
 | Port 8000 already in use | Kill existing process: `lsof -i :8000` then `kill -9 <PID>` |
+| Integration tests skipped | Set `OPENROUTER_API_KEY` or `SUPABASE_SERVICE_ROLE_KEY` in `.env` |
+| Storage upload tests failing | Ensure storage bucket `mobibox-archive` exists in Supabase |
 
 ## API Endpoints
 
@@ -522,13 +524,131 @@ pytest --cov=src --cov-report=html
 | Test File | Description |
 |-----------|-------------|
 | `test_upload.py` | API endpoint tests |
-| `test_llm_utils.py` | LLM service tests |
+| `test_llm_utils.py` | LLM service unit tests (mocked) |
+| `test_llm_integration.py` | LLM integration tests (real API calls) |
 | `test_celery_services.py` | Celery service tests |
 | `test_celery_tasks.py` | Celery task tests |
+| `test_archive_service.py` | Archival service unit tests (mocked) |
+| `test_archive_service_integration.py` | Archival integration tests (real DB) |
+| `test_archive_storage_integration.py` | Storage upload tests (real Supabase) |
 | `test_query.py` | Query endpoint tests |
-| `test_intervention_pipeline_integration.py` | Intervention pipeline integration tests |
+| `test_tsfm.py` | TSFM model tests |
+| `test_intervention_pipeline_integration.py` | Intervention pipeline tests |
 
-### Manual Task Testing
+### Unit Tests vs Integration Tests
+
+**Unit Tests** (fast, mocked):
+```bash
+# Run unit tests only (skip integration tests)
+pytest -v --ignore=src/test/test_llm_integration.py \
+           --ignore=src/test/test_archive_service_integration.py \
+           --ignore=src/test/test_archive_storage_integration.py
+```
+
+**Integration Tests** (require real credentials):
+```bash
+# Run integration tests only
+pytest -v -m integration
+
+# Requires:
+# - OPENROUTER_API_KEY in .env (for LLM tests)
+# - SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (for storage tests)
+```
+
+### Test Fixtures
+
+The `conftest.py` file provides common fixtures:
+
+| Fixture | Description |
+|---------|-------------|
+| `mock_supabase_client` | Mocked Supabase client for unit tests |
+| `client` | FastAPI test client with mocked Supabase |
+| `mock_rate_limiter` | Mocked rate limiter for LLM tests |
+| `mock_llm_settings` | Mocked LLM settings for unit tests |
+| `mock_chat_openai` | Mocked ChatOpenAI for LLM tests |
+
+### Running Specific Test Categories
+
+#### LLM Tests
+```bash
+# Unit tests (mocked, no API key needed)
+pytest src/test/test_llm_utils.py -v
+
+# Integration tests (requires OPENROUTER_API_KEY)
+pytest src/test/test_llm_integration.py -v -m integration
+```
+
+#### Archival Tests
+```bash
+# Unit tests (mocked, no Supabase needed)
+pytest src/test/test_archive_service.py -v
+
+# Integration tests (requires Supabase credentials)
+pytest src/test/test_archive_service_integration.py -v -m integration
+
+# Storage upload tests (uploads to /tests folder in bucket)
+pytest src/test/test_archive_storage_integration.py -v -m integration
+```
+
+### Integration Test Requirements
+
+Integration tests require real API credentials. Set these in your `.env`:
+
+```env
+# LLM Integration Tests
+OPENROUTER_API_KEY=sk-or-v1-...
+
+# Supabase Integration Tests
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIs...
+```
+
+Integration tests are automatically skipped if credentials are missing.
+
+### Viewing Test Data in Supabase
+
+After running storage integration tests, you can view uploaded test files:
+
+1. Go to **Supabase Dashboard** → **Storage**
+2. Navigate to `mobibox-archive` bucket
+3. Open the `tests` folder to see uploaded Parquet files:
+
+```
+tests/
+├── imu/
+│   └── 2026/03/
+│       └── test-2026-03-08-*.parquet
+├── har/
+│   └── 2026/03/
+│       └── test-2026-03-08-*.parquet
+├── atomic_activities/
+│   └── 2026/03/
+│       └── test-2026-03-08-*.parquet
+└── verify/
+    └── test-*.parquet
+```
+
+### Test Output Examples
+
+#### Unit Test Output
+```
+src/test/test_archive_service.py::TestRecordsToParquet::test_empty_records PASSED
+src/test/test_archive_service.py::TestRecordsToParquet::test_simple_records PASSED
+src/test/test_archive_service.py::TestArchiveService::test_archive_table_success PASSED
+...
+21 passed in 0.20s
+```
+
+#### Integration Test Output
+```
+src/test/test_archive_storage_integration.py::TestStorageUpload::test_upload_small_parquet_to_tests_folder
+Parquet file size: 3397 bytes
+Successfully uploaded to: tests/imu/2026/03/test-2026-03-08-000210.parquet
+Verified file exists: test-2026-03-08-000210.parquet
+PASSED
+...
+7 passed in 3.00s
+```
 
 ```bash
 # Test HAR processing for a user
@@ -636,9 +756,13 @@ MobiBox_server/
 │       ├── __init__.py
 │       ├── conftest.py      # Pytest fixtures
 │       ├── test_upload.py   # Upload endpoint tests
-│       ├── test_llm_utils.py # LLM service tests
+│       ├── test_llm_utils.py # LLM service tests (mocked)
+│       ├── test_llm_integration.py # LLM integration tests (real API)
 │       ├── test_celery_services.py # Celery service tests
 │       ├── test_celery_tasks.py # Celery task tests
+│       ├── test_archive_service.py # Archive service tests (mocked)
+│       ├── test_archive_service_integration.py # Archive integration tests
+│       ├── test_archive_storage_integration.py # Storage upload tests
 │       ├── test_query.py    # Query endpoint tests
 │       ├── test_tsfm.py     # TSFM model tests
 │       └── test_intervention_pipeline_integration.py # Intervention pipeline tests
@@ -1278,10 +1402,14 @@ mobibox-archive/
 ```
 
 **Benefits of Parquet:**
-- **10-100x smaller** than CSV (columnar + dictionary encoding)
+- **2-10x smaller** than CSV (columnar + Snappy compression + dictionary encoding)
 - **Type preservation** (timestamps, numbers remain typed)
 - **Query optimization** (built-in statistics)
 - **Industry standard** for data lakes and analytics
+
+**Compression Efficiency (from tests):**
+- 1,000 IMU records: ~31KB Parquet vs ~79KB CSV = **2.57x compression**
+- Larger datasets achieve even better ratios (10-100x for repetitive data)
 
 ### Retention Policy
 
