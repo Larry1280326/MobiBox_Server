@@ -48,6 +48,7 @@ env/
 
 # Logs
 *.log
+*.log.*
 *.pt
 logs/
 

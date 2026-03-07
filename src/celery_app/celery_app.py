@@ -3,6 +3,7 @@
 import logging
 
 from celery import Celery
+from celery.signals import setup_logging
 
 from src.config import get_settings
 from src.celery_app.config import CELERY_BEAT_SCHEDULE
@@ -18,6 +19,39 @@ celery_app = Celery(
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
 )
+
+
+@setup_logging.connect
+def configure_celery_logging(**kwargs):
+    """Configure Celery logging with rotational file handlers."""
+    from src.logging_config import get_file_handler, DEFAULT_LOGS_DIR
+
+    # Disable Celery's default logging configuration
+    # We'll set up our own handlers
+
+    # Get the log file based on the current process
+    # Celery worker uses 'celery_worker.log', beat uses 'celery_beat.log'
+    import sys
+
+    if "beat" in " ".join(sys.argv):
+        log_file = "celery_beat.log"
+    else:
+        log_file = "celery_worker.log"
+
+    # Create rotating file handler
+    file_handler = get_file_handler(log_file)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    # Add file handler to root logger
+    root_logger.addHandler(file_handler)
+
+    # Configure celery logger
+    celery_logger = logging.getLogger("celery")
+    celery_logger.setLevel(logging.INFO)
+    celery_logger.addHandler(file_handler)
 
 # Celery configuration
 celery_app.conf.update(

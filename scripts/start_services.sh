@@ -109,7 +109,9 @@ if check_port 8000; then
 else
     echo -e "${YELLOW}Starting FastAPI server...${NC}"
     cd "$PROJECT_ROOT"
-    nohup uvicorn src.main:app --host 0.0.0.0 --port 8000 > "$LOGS_DIR/api.log" 2>&1 &
+    # Logs are handled by Python's RotatingFileHandler in src/logging_config.py
+    # Redirect stdout/stderr to /dev/null to avoid nohup.out
+    nohup uvicorn src.main:app --host 0.0.0.0 --port 8000 > /dev/null 2>&1 &
     echo $! > "$LOGS_DIR/api.pid"
     wait_for_service "FastAPI" 8000
 fi
@@ -126,7 +128,9 @@ if pgrep -f "celery.*worker" > /dev/null; then
 else
     echo -e "${YELLOW}Starting Celery worker...${NC}"
     cd "$PROJECT_ROOT"
-    nohup celery -A src.celery_app.celery_app worker --loglevel=info > "$LOGS_DIR/celery_worker.log" 2>&1 &
+    # Logs are handled by Python's RotatingFileHandler in src/logging_config.py
+    # Redirect stdout/stderr to /dev/null to avoid nohup.out
+    nohup celery -A src.celery_app.celery_app worker --loglevel=info > /dev/null 2>&1 &
     echo $! > "$LOGS_DIR/celery_worker.pid"
     sleep 3
     echo -e "${GREEN}✓ Celery worker started${NC}"
@@ -144,7 +148,9 @@ if pgrep -f "celery.*beat" > /dev/null; then
 else
     echo -e "${YELLOW}Starting Celery beat...${NC}"
     cd "$PROJECT_ROOT"
-    nohup celery -A src.celery_app.celery_app beat --loglevel=info > "$LOGS_DIR/celery_beat.log" 2>&1 &
+    # Logs are handled by Python's RotatingFileHandler in src/logging_config.py
+    # Redirect stdout/stderr to /dev/null to avoid nohup.out
+    nohup celery -A src.celery_app.celery_app beat --loglevel=info > /dev/null 2>&1 &
     echo $! > "$LOGS_DIR/celery_beat.pid"
     sleep 2
     echo -e "${GREEN}✓ Celery beat started${NC}"
