@@ -22,22 +22,29 @@ CHINA_TZ = ZoneInfo("Asia/Shanghai")
 async def get_summary_logs(
     user: str,
     log_type: str,
+    last_log_id: Optional[int] = None,
     client: Client | None = None,
-) -> Optional[dict]:
+) -> tuple[Optional[dict], bool]:
     """
     Fetch the most recent summary log for a user from the database.
+
+    Supports polling mechanism: if last_log_id is provided, returns None
+    if the latest log ID matches (meaning no new log since last check).
 
     Args:
         user: User identifier
         log_type: Type of summary log (hourly or daily)
+        last_log_id: Optional ID of the last received log. If provided,
+                     returns (None, False) if no new log is available.
         client: Optional Supabase client
 
     Returns:
-        The most recent summary log record, or None if not found
+        Tuple of (log record or None, has_new_log boolean)
     """
     if client is None:
         client = get_supabase_client()
 
+    # Get the most recent log
     response = await asyncio.to_thread(
         lambda: client.table(SUMMARY_LOGS_TABLE)
         .select("*")
@@ -48,7 +55,22 @@ async def get_summary_logs(
         .execute()
     )
 
-    return response.data[0] if response.data else None
+    if not response.data:
+        return None, False
+
+    latest_log = response.data[0]
+    latest_id = latest_log.get("id")
+
+    # If last_log_id provided, check if there's a newer log
+    if last_log_id is not None:
+        if latest_id == last_log_id:
+            # No new log
+            return None, False
+        # There's a newer log
+        return latest_log, True
+
+    # No last_log_id provided, return latest
+    return latest_log, True
 
 
 async def get_interventions(

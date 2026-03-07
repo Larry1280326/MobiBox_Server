@@ -127,6 +127,17 @@ CELERY_BROKER_URL=amqp://guest:guest@localhost:5672//
 CELERY_RESULT_BACKEND=rpc://
 ```
 
+#### Baidu Maps Configuration (Optional)
+
+For GPS-to-location reverse geocoding:
+
+```env
+BAIDU_MAPS_API_KEY=your-baidu-api-key
+BAIDU_MAPS_ENABLED=true
+```
+
+If not configured, the system falls back to using provided address/POI data.
+
 ### Create and Activate Environment
 
 #### Option 1: Create from YAML file (Recommended)
@@ -541,6 +552,8 @@ MobiBox_server/
 │   ├── api.log              # FastAPI logs
 │   ├── celery_worker.log    # Celery worker logs
 │   └── celery_beat.log      # Celery beat logs
+├── migrations/               # Database migrations (new)
+│   └── 002_add_missing_features_tables.sql
 ├── docs/                     # Documentation
 │   └── TSFM_INTEGRATION.md  # TSFM model documentation
 ├── src/
@@ -572,6 +585,9 @@ MobiBox_server/
 │   │   │   ├── har_service.py
 │   │   │   ├── atomic_service.py
 │   │   │   ├── summary_service.py
+│   │   │   ├── app_category_service.py  # App category lookup (new)
+│   │   │   ├── processing_state_service.py  # User state tracking (new)
+│   │   │   ├── intervention_service.py
 │   │   │   ├── tsfm_service.py         # TSFM model wrapper
 │   │   │   └── tsfm_model/             # TSFM model code
 │   │   │       ├── __init__.py
@@ -594,6 +610,9 @@ MobiBox_server/
 │   │   └── README.md        # Celery documentation
 │   ├── llm_utils/           # LLM integration utilities
 │   │   └── services.py
+│   ├── services/             # External services (new)
+│   │   ├── __init__.py
+│   │   └── baidu_maps.py    # Baidu Maps API client
 │   ├── query/               # Query module for summary logs and interventions
 │   │   ├── __init__.py
 │   │   ├── constants.py
@@ -669,11 +688,12 @@ The application connects to Supabase and uses the following tables:
 - `mag_X`, `mag_Y`, `mag_Z` (float) - Magnetometer readings
 
 ### har table
-- `user` (text) - User identifier
-- `label` (text) - Activity label (walking, running, sitting, etc.)
-- `confidence` (float) - Confidence score (0-1)
-- `source` (text) - Source of label
+- `id` (bigint, auto-generated) - Primary key
 - `timestamp` (timestamptz) - Record timestamp
+- `user` (varchar) - User identifier
+- `har_label` (enum) - Activity label (walking, running, sitting, etc.)
+- `confidence` (real, new) - Confidence score (0-1)
+- `source` (varchar, new) - Source: 'tsfm_model', 'imu_model', 'mock_har', 'insufficient_data'
 
 ### atomic_activities table
 - `user` (text) - User identifier
@@ -702,6 +722,22 @@ The application connects to Supabase and uses the following tables:
 - `highlights` (jsonb) - Key highlights
 - `recommendations` (jsonb) - Recommendations
 - `timestamp` (timestamptz) - Record timestamp
+
+### app_categories table (new)
+- `id` (serial, primary key) - Auto-increment ID
+- `app_name` (text, unique) - App package name
+- `category` (text) - Category classification
+- `source` (text) - 'lookup' (predefined) or 'llm' (learned)
+- `created_at` (timestamptz) - Record timestamp
+
+### user_processing_state table (new)
+- `user` (text, primary key) - User identifier
+- `last_har_timestamp` (timestamptz) - Last HAR processing time
+- `last_atomic_timestamp` (timestamptz) - Last atomic activity time
+- `last_upload_timestamp` (timestamptz) - Last data upload time
+- `data_collection_start` (timestamptz) - Data collection start time
+- `last_summary_generated` (timestamptz) - Last summary generation time
+- `updated_at` (timestamptz) - Record update time
 
 ## Celery Tasks
 
@@ -807,6 +843,311 @@ IMU Data (N samples × 9 channels)
 ```
 
 For detailed TSFM documentation, see [docs/TSFM_INTEGRATION.md](docs/TSFM_INTEGRATION.md).
+
+## Feature Implementation Details
+
+This section documents the key features implemented in the MobiBox backend.
+
+### 1. App Category Table Lookup
+
+**Purpose:** Reduce LLM API calls for app classification by using a cached lookup table.
+
+**Files:**
+- `src/celery_app/services/app_category_service.py` - App category lookup service
+- `src/celery_app/services/atomic_service.py` - Integration point
+
+**How it works:**
+1. In-memory cache with 70+ predefined common apps
+2. Database cache (`app_categories` table) for learned classifications
+3. LLM fallback for unknown apps
+4. Results cached in database for future use
+
+**Categories:**
+- social communication app
+- video and music app
+- games or gaming platform
+- e-commerce/shopping platform
+- office/working app
+- learning and education app
+- health management/self-discipline app
+- financial services app
+- news/reading app
+- tool/engineering/functional app
+- uncertain
+
+---
+
+### 2. Last Processed Timestamp Tracking
+
+**Purpose:** Enable incremental data processing to avoid reprocessing the same data.
+
+**Files:**
+- `src/celery_app/services/processing_state_service.py` - State tracking service
+
+**Database Table:** `user_processing_state`
+
+| Column | Description |
+|--------|-------------|
+| user | User identifier (primary key) |
+| last_har_timestamp | Last HAR processing timestamp |
+| last_atomic_timestamp | Last atomic activity timestamp |
+| last_upload_timestamp | Last data upload timestamp |
+| data_collection_start | When user started collecting data |
+| last_summary_generated | Last summary log timestamp |
+
+---
+
+### 3. Hourly Log Threshold Check
+
+**Purpose:** Only generate summary logs when sufficient data is available.
+
+**Configuration** (`src/celery_app/config.py`):
+```python
+MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG = 60  # At least 60 records
+MIN_UNIQUE_LABELS_FOR_LOG = 3  # At least 3 unique activity types
+```
+
+**Function:** `should_generate_summary()` in `summary_service.py`
+
+---
+
+### 4. Per-User Hourly Timer
+
+**Purpose:** Generate logs based on user's data accumulation, not fixed schedule.
+
+**Configuration:**
+```python
+MIN_DATA_COLLECTION_HOURS = 1  # Minimum 1 hour of data
+MIN_HOURS_BETWEEN_SUMMARIES = 1  # Minimum 1 hour between logs
+```
+
+**Function:** `check_user_hourly_ready()` in `summary_service.py`
+
+**Flow:**
+1. User starts collecting data → `data_collection_start` is set
+2. Wait until user has 1+ hour of data
+3. Wait until at least 1 hour since last summary
+4. Check data threshold requirements
+5. Generate and store summary
+
+---
+
+### 5. Mobile Polling Mechanism
+
+**Purpose:** Allow mobile app to efficiently detect new logs via polling.
+
+**API Changes:**
+
+**Request:**
+```json
+POST /get_summary_log
+{
+  "user": "username",
+  "log_type": "hourly",
+  "last_log_id": 123  // Optional: ID of last received log
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": { ... },  // Null if no new log
+  "has_new_log": true  // False if last_log_id matches latest
+}
+```
+
+**Usage:**
+1. Mobile calls `/get_summary_log` without `last_log_id` to get initial log
+2. Mobile stores `data.id` as `last_log_id`
+3. Mobile polls with `last_log_id` to check for new logs
+4. If `has_new_log` is `false`, no new data to download
+
+---
+
+### 6. Baidu Map API Integration
+
+**Purpose:** Enrich GPS coordinates with location names via reverse geocoding.
+
+**Files:**
+- `src/services/baidu_maps.py` - Baidu Maps API client
+- `src/config.py` - Configuration settings
+
+**Configuration:**
+```env
+BAIDU_MAPS_API_KEY=your-api-key
+BAIDU_MAPS_ENABLED=true
+```
+
+**Features:**
+- Reverse geocoding (GPS → address, POI, city, district)
+- 1-hour cache to minimize API calls
+- Automatic fallback to provided address/POI if API fails
+
+**Response fields:**
+- `address` - Formatted address
+- `poi` - List of nearby POIs
+- `city` - City name
+- `district` - District name
+- `business` - Business area
+
+---
+
+## Database Migration
+
+Run migrations in order:
+
+```bash
+# Migration 002: Add missing features tables
+psql -f migrations/002_add_missing_features_tables.sql
+
+# Migration 003: Database improvements (indexes, constraints, triggers)
+psql -f migrations/003_database_improvements.sql
+```
+
+### Migration 002: New Tables
+
+Creates tables for app categories cache and user processing state:
+
+```sql
+-- App categories cache
+CREATE TABLE IF NOT EXISTS app_categories (
+    id SERIAL PRIMARY KEY,
+    app_name TEXT NOT NULL UNIQUE,
+    category TEXT NOT NULL,
+    source TEXT DEFAULT 'llm',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- User processing state
+CREATE TABLE IF NOT EXISTS user_processing_state (
+    "user" TEXT PRIMARY KEY,
+    last_har_timestamp TIMESTAMPTZ,
+    last_atomic_timestamp TIMESTAMPTZ,
+    last_upload_timestamp TIMESTAMPTZ,
+    data_collection_start TIMESTAMPTZ,
+    last_summary_generated TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Migration 003: Performance Improvements
+
+Adds indexes, constraints, and triggers for better performance:
+
+- **Foreign Keys**: Links `user_processing_state.user` to `user.name`
+- **Indexes**: Optimizes common queries on `atomic_activities`, `har`, `summary_logs`
+- **Triggers**: Auto-updates `updated_at` timestamps
+- **Constraints**: Validates `log_type`, `source` values
+- **Views**: `v_user_recent_activity`, `v_users_ready_for_summary`
+
+---
+
+## Database Schema Reference
+
+### Core Tables
+
+#### `har` Table
+Human Activity Recognition labels from IMU sensor data.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | bigint | Auto-generated primary key |
+| `timestamp` | timestamptz | When the activity was detected |
+| `user` | varchar | User identifier (FK to user.name) |
+| `har_label` | enum | Activity label (walking, running, sitting, etc.) |
+| `confidence` | real | Model confidence score (0.0-1.0) |
+| `source` | varchar | Source: 'tsfm_model', 'imu_model', 'mock_har', 'insufficient_data' |
+
+#### `atomic_activities` Table
+7-dimensional atomic activity labels.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | bigint | Auto-generated primary key |
+| `timestamp` | timestamptz | When the activity was generated |
+| `user` | varchar | User identifier (FK to user.name) |
+| `har_label` | enum | HAR activity label |
+| `app_category` | enum | App usage category |
+| `app_name` | varchar | Specific app package name (new) |
+| `step_count` | enum | Step activity label |
+| `phone_usage` | enum | Phone usage pattern |
+| `social` | enum | Social context label |
+| `movement` | enum | Movement pattern label |
+| `location` | varchar | Location context |
+
+#### `summary_logs` Table
+Hourly and daily activity summaries.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | bigint | Auto-generated primary key (used for polling) |
+| `timestamp` | timestamptz | When the summary was generated |
+| `user` | varchar | User identifier |
+| `log_type` | enum | 'hourly' or 'daily' |
+| `summary` | text | Summary content |
+| `start_timestamp` | timestamptz | Window start time |
+| `end_timestamp` | timestamptz | Window end time |
+
+#### `app_categories` Table
+Cache for app category classifications.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | serial | Primary key |
+| `app_name` | text | App package name (unique) |
+| `category` | text | Category classification |
+| `source` | text | 'lookup' or 'llm' |
+| `created_at` | timestamptz | When cached |
+
+#### `user_processing_state` Table
+Per-user processing timestamps for incremental processing.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `user` | text | User identifier (PK, FK to user.name) |
+| `last_har_timestamp` | timestamptz | Last HAR processing time |
+| `last_atomic_timestamp` | timestamptz | Last atomic activity time |
+| `last_upload_timestamp` | timestamptz | Last data upload time |
+| `data_collection_start` | timestamptz | When user started collecting data |
+| `last_summary_generated` | timestamptz | Last summary generation time |
+| `updated_at` | timestamptz | Auto-updated timestamp |
+
+### Indexes
+
+Key indexes for performance:
+
+| Table | Index | Purpose |
+|-------|-------|---------|
+| `atomic_activities` | `(user, timestamp DESC)` | User activity queries |
+| `har` | `(user, timestamp DESC)` | HAR label queries |
+| `summary_logs` | `(user, log_type, timestamp DESC)` | Summary polling |
+| `imu` | `(user, timestamp DESC)` | IMU data queries |
+| `app_categories` | `(app_name)` | App category lookup |
+
+### Views
+
+#### `v_user_recent_activity`
+Recent activity summary per user:
+```sql
+SELECT user, MAX(timestamp) as last_activity,
+       COUNT(*) as activity_count,
+       MODE() WITHIN GROUP (ORDER BY har_label) as dominant_activity
+FROM atomic_activities GROUP BY user;
+```
+
+#### `v_users_ready_for_summary`
+Users ready for summary generation (1+ hour of data, 1+ hour since last summary):
+```sql
+SELECT user, data_collection_start, last_summary_generated,
+       EXTRACT(EPOCH FROM (NOW() - data_collection_start))/3600 as hours_since_start
+FROM user_processing_state
+WHERE data_collection_start IS NOT NULL
+  AND hours_since_start >= 1
+  AND (last_summary_generated IS NULL OR hours_since_last_summary >= 1);
+```
+
+---
 
 ## Service Management Scripts
 

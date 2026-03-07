@@ -72,3 +72,15 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(hour=0, minute=0),  # Midnight
     },
 }
+
+# =============================================================================
+# Summary Generation Thresholds
+# =============================================================================
+
+# Minimum data required before generating a summary log
+MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG = 60  # At least 60 atomic records (10s each = 10min of data)
+MIN_UNIQUE_LABELS_FOR_LOG = 3  # At least 3 unique activity types
+
+# Per-user hourly timer settings
+MIN_DATA_COLLECTION_HOURS = 1  # Minimum hours of data collection before generating first summary
+MIN_HOURS_BETWEEN_SUMMARIES = 1  # Minimum hours between summary generations

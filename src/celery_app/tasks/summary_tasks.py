@@ -7,6 +7,10 @@ Scheduled tasks:
 
 Data flow:
   atomic_activities -> summary_logs -> interventions
+
+Features:
+- Per-user hourly timer: Only generate logs when user has 1+ hour of data
+- Threshold check: Only generate when enough data is available
 """
 
 import asyncio
@@ -20,6 +24,7 @@ from src.celery_app.services.summary_service import (
     compress_atomic_activities,
     generate_summary,
     insert_summary_log,
+    generate_summary_for_user,
 )
 from src.celery_app.services.intervention_service import (
     generate_intervention_from_summary,
@@ -102,6 +107,12 @@ def generate_hourly_summary() -> dict:
     Generate hourly summary logs for all users with recent activity.
 
     Runs every hour via Celery Beat.
+
+    Uses threshold-based generation:
+    - Only generates logs when user has enough data
+    - Per-user timer: respects user's data collection start time
+    - Respects minimum time between summaries
+
     Creates a narrative summary of the user's activities.
     """
     logger.info("Starting hourly summary generation")
@@ -118,23 +129,17 @@ def generate_hourly_summary() -> dict:
             "skipped": 0,
             "errors": 0,
             "summaries": [],
+            "skip_reasons": {},
         }
 
         for user in users:
             try:
-                # Compress activities
-                compressed = await compress_atomic_activities(user, hours=1, client=client)
-
-                if not compressed.get("total_records"):
-                    results["skipped"] += 1
-                    continue
-
-                # Generate summary
-                summary_log = await generate_summary(user, compressed, log_type="hourly")
+                # Use threshold-based summary generation with per-user timer
+                summary_log = await generate_summary_for_user(
+                    user, hours=1, log_type="hourly", client=client
+                )
 
                 if summary_log:
-                    # Insert to database
-                    await insert_summary_log(summary_log, client)
                     results["processed"] += 1
                     results["summaries"].append({
                         "user": user,

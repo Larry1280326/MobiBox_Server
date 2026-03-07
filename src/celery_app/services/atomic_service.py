@@ -2,12 +2,12 @@
 
 This module implements 7 dimensions of atomic activity labeling:
 1. HAR label - Human Activity Recognition via LLM
-2. APP category - Application usage category via LLM
+2. APP category - Application usage category via table lookup + LLM fallback
 3. Steps label - Step activity via if-else rules
 4. Phone usage - Phone usage pattern via if-else rules
 5. Social label - Social context via if-else rules
 6. Movement label - Movement pattern via if-else rules
-7. Location label - Location context via LLM
+7. Location label - Location context via LLM (with optional Baidu Maps integration)
 """
 
 import asyncio
@@ -30,6 +30,7 @@ from src.celery_app.config import (
     ATOMIC_LOCATION_WINDOW_SECONDS,
 )
 from src.celery_app.schemas.atomic_schemas import AtomicActivity
+from src.celery_app.services.app_category_service import get_app_category_with_details, AppCategoryResult
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +168,12 @@ async def generate_app_category(
     user: str,
     window_seconds: int = ATOMIC_APP_WINDOW_SECONDS,
     client: Client | None = None,
-) -> Optional[str]:
+) -> tuple[Optional[str], Optional[str]]:
     """
-    Generate app usage category using LLM.
+    Generate app usage category using table lookup with LLM fallback.
+
+    First checks predefined common apps (in-memory cache), then database cache,
+    and falls back to LLM classification for unknown apps.
 
     Args:
         user: User identifier
@@ -177,12 +181,12 @@ async def generate_app_category(
         client: Optional Supabase client
 
     Returns:
-        App category string or None
+        Tuple of (category, app_name) strings, or (None, None) if no data
     """
     doc_data = await get_document_window(user, window_seconds, client)
 
     if not doc_data:
-        return None
+        return None, None
 
     # Extract app usage info
     apps = []
@@ -191,33 +195,20 @@ async def generate_app_category(
             apps.append(doc["current_app"])
 
     if not apps:
-        return None
+        return None, None
 
-    system_prompt = """You are an app usage analyst. Categorize the user's current app usage into one of these categories:
-- social communication app (Facebook, Instagram, WhatsApp, etc.)
-- common life app (daily utilities)
-- office/working app (Email, Calendar, Office apps, etc.)
-- learning and education app (courses, learning apps)
-- e-commerce/shopping platform (Amazon, eBay, food delivery)
-- news/reading app (News apps, RSS readers)
-- video and music app (YouTube, Netflix, Spotify)
-- health management/self-discipline app (Fitness trackers, health apps)
-- financial services app (Banking, payment apps)
-- comprehensive entertainment app (Games, entertainment)
-- games or gaming platform
-- tool/engineering/functional app (Maps, GPS, utilities)
-- uncertain
+    # Get the most common app in the window
+    from collections import Counter
+    app_counts = Counter(apps)
+    most_common_app = app_counts.most_common(1)[0][0]
 
-Return only the category name exactly as listed above."""
+    # Use the app category service with table lookup + LLM fallback
+    result = await get_app_category_with_details(most_common_app, client)
 
-    user_prompt = f"Current apps used:\n{chr(10).join(apps[-10:])}\n\nWhat category best describes this usage?"
+    if result and result.category:
+        return result.category.lower(), result.app_name
 
-    try:
-        result = await query_llm(system_prompt, user_prompt, temperature=0.1)
-        return result.strip().lower()
-    except Exception as e:
-        logger.error(f"Error generating app category via LLM: {e}")
-        return "other"
+    return "uncertain", most_common_app
 
 
 async def generate_location_label(
@@ -226,7 +217,10 @@ async def generate_location_label(
     client: Client | None = None,
 ) -> Optional[str]:
     """
-    Generate location context label using LLM.
+    Generate location context label using LLM with optional Baidu Maps enrichment.
+
+    First enriches GPS coordinates with Baidu Maps reverse geocoding (if enabled),
+    then uses LLM to classify location context.
 
     Args:
         user: User identifier
@@ -236,6 +230,9 @@ async def generate_location_label(
     Returns:
         Location label string or None
     """
+    from src.config import get_settings
+    from src.services.baidu_maps import reverse_geocode
+
     doc_data = await get_document_window(user, window_seconds, client)
 
     if not doc_data:
@@ -243,14 +240,40 @@ async def generate_location_label(
 
     # Extract location info
     location_info = []
+    settings = get_settings()
+
     for doc in doc_data:
         info = {}
-        if doc.get("gpsLat") and doc.get("gpsLon"):
-            info["gps"] = f"({doc['gpsLat']}, {doc['gpsLon']})"
-        if doc.get("address"):
+        lat = doc.get("gpsLat")
+        lon = doc.get("gpsLon")
+
+        # Try Baidu Maps enrichment if GPS coordinates available
+        if lat is not None and lon is not None and settings.baidu_maps_enabled and settings.baidu_maps_api_key:
+            try:
+                baidu_location = await reverse_geocode(float(lat), float(lon))
+                if baidu_location:
+                    # Use enriched data from Baidu Maps
+                    if baidu_location.get("address"):
+                        info["address"] = baidu_location["address"]
+                    if baidu_location.get("poi"):
+                        info["poi"] = ", ".join(baidu_location["poi"])
+                    if baidu_location.get("district"):
+                        info["district"] = baidu_location["district"]
+                    if baidu_location.get("business"):
+                        info["business"] = baidu_location["business"]
+                    # Keep GPS for reference
+                    info["gps"] = f"({lat}, {lon})"
+            except Exception as e:
+                logger.debug(f"Baidu Maps enrichment failed: {e}")
+                # Fallback to raw data
+                info["gps"] = f"({lat}, {lon})"
+
+        # Add any additional provided data (may override Baidu data)
+        if doc.get("address") and "address" not in info:
             info["address"] = doc["address"]
-        if doc.get("poi"):
+        if doc.get("poi") and "poi" not in info:
             info["poi"] = doc["poi"]
+
         if info:
             location_info.append(info)
 
@@ -282,6 +305,10 @@ Return only the location context label."""
             desc_parts.append(f"Address: {loc['address']}")
         if "poi" in loc:
             desc_parts.append(f"POI: {loc['poi']}")
+        if "district" in loc:
+            desc_parts.append(f"District: {loc['district']}")
+        if "business" in loc:
+            desc_parts.append(f"Business: {loc['business']}")
         location_descriptions.append(", ".join(desc_parts))
 
     user_prompt = f"Location data:\n{chr(10).join(location_descriptions)}\n\nWhat is the location context?"
@@ -556,11 +583,19 @@ async def generate_all_atomic_labels(
     def safe_result(result, default=None):
         return result if not isinstance(result, Exception) else default
 
+    # Extract app_category and app_name from the tuple result
+    app_result = safe_result(results[1])
+    if isinstance(app_result, tuple):
+        app_category, app_name = app_result
+    else:
+        app_category, app_name = safe_result(results[1]), None
+
     return AtomicActivity(
         user=user,
         timestamp=datetime.now(CHINA_TZ),
         har_label=safe_result(results[0]),
-        app_category=safe_result(results[1]),
+        app_category=app_category,
+        app_name=app_name,
         step_label=safe_result(results[2]),
         phone_usage=safe_result(results[3]),
         social_label=safe_result(results[4]),
@@ -593,6 +628,7 @@ async def insert_atomic_activity(
         "timestamp": raw["timestamp"].isoformat(),
         "har_label": raw["har_label"] or "unknown",
         "app_category": raw["app_category"] or "uncertain",
+        "app_name": raw.get("app_name"),  # New field for tracking specific app
         "step_count": raw["step_label"] or "almost stationary",
         "phone_usage": raw["phone_usage"] or "idle",
         "social": raw["social_label"] or "alone",

@@ -3,6 +3,8 @@
 This module handles:
 - Compressing atomic activities into summaries
 - Creating daily/hourly summary logs
+- Threshold-based log generation (minimum data requirements)
+- Per-user hourly timer (generate logs based on data accumulation)
 """
 
 import asyncio
@@ -16,6 +18,18 @@ from supabase import Client
 
 from src.database import get_supabase_client
 from src.llm_utils.services import generate_structured_output
+from src.celery_app.config import (
+    MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG,
+    MIN_UNIQUE_LABELS_FOR_LOG,
+    MIN_DATA_COLLECTION_HOURS,
+    MIN_HOURS_BETWEEN_SUMMARIES,
+)
+from src.celery_app.services.processing_state_service import (
+    get_user_state,
+    set_data_collection_start,
+    update_last_summary_generated,
+    get_last_summary_generated,
+)
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -291,3 +305,171 @@ async def insert_summary_log(
     )
 
     return response.data[0] if response.data else {}
+
+
+# ============================================================================
+# Threshold-Based Summary Generation
+# =============================================================================
+
+
+async def should_generate_summary(
+    user: str,
+    hours: int,
+    client: Client | None = None,
+) -> tuple[bool, dict]:
+    """Check if user has enough data to generate a meaningful summary.
+
+    Verifies minimum thresholds for:
+    - Total atomic records (MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG)
+    - Unique activity types (MIN_UNIQUE_LABELS_FOR_LOG)
+
+    Args:
+        user: User identifier
+        hours: Number of hours to look back
+        client: Optional Supabase client
+
+    Returns:
+        Tuple of (should_generate, compressed_data)
+    """
+    compressed = await compress_atomic_activities(user, hours, client)
+
+    # Check minimum record count
+    total_records = compressed.get("total_records", 0)
+    if total_records < MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG:
+        logger.debug(
+            f"User {user} has {total_records} records, need {MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG}"
+        )
+        return False, compressed
+
+    # Check minimum unique activities
+    unique_activities = set()
+    summary = compressed.get("summary", {})
+
+    # Count unique activity types across all dimensions
+    for label_list in summary.values():
+        if isinstance(label_list, dict):
+            unique_activities.update(label_list.keys())
+
+    if len(unique_activities) < MIN_UNIQUE_LABELS_FOR_LOG:
+        logger.debug(
+            f"User {user} has {len(unique_activities)} unique activities, need {MIN_UNIQUE_LABELS_FOR_LOG}"
+        )
+        return False, compressed
+
+    return True, compressed
+
+
+async def check_user_hourly_ready(
+    user: str,
+    client: Client | None = None,
+) -> tuple[bool, str]:
+    """Check if user is ready for hourly summary generation.
+
+    User is ready when:
+    1. Has accumulated enough data collection time (MIN_DATA_COLLECTION_HOURS)
+    2. Has enough time since last summary (MIN_HOURS_BETWEEN_SUMMARIES)
+    3. Has enough data to meet threshold requirements
+
+    Args:
+        user: User identifier
+        client: Optional Supabase client
+
+    Returns:
+        Tuple of (is_ready, reason)
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    # Get user's processing state
+    state = await get_user_state(user, client)
+
+    now = datetime.now(CHINA_TZ)
+
+    # Check data collection start time
+    if state and state.get("data_collection_start"):
+        data_start_str = state["data_collection_start"]
+        if isinstance(data_start_str, str):
+            data_start = datetime.fromisoformat(data_start_str.replace("Z", "+00:00"))
+        else:
+            data_start = data_start_str
+
+        hours_since_start = (now - data_start).total_seconds() / 3600
+        if hours_since_start < MIN_DATA_COLLECTION_HOURS:
+            return False, f"Data collection started {hours_since_start:.1f}h ago, need {MIN_DATA_COLLECTION_HOURS}h"
+    else:
+        # First time - set data collection start
+        await set_data_collection_start(user, client)
+        return False, "Data collection just started"
+
+    # Check if enough time since last summary
+    if state and state.get("last_summary_generated"):
+        last_summary_str = state["last_summary_generated"]
+        if isinstance(last_summary_str, str):
+            last_summary = datetime.fromisoformat(last_summary_str.replace("Z", "+00:00"))
+        else:
+            last_summary = last_summary_str
+
+        hours_since_summary = (now - last_summary).total_seconds() / 3600
+        if hours_since_summary < MIN_HOURS_BETWEEN_SUMMARIES:
+            return False, f"Last summary {hours_since_summary:.1f}h ago, need {MIN_HOURS_BETWEEN_SUMMARIES}h gap"
+
+    # Check data threshold
+    has_enough, _ = await should_generate_summary(user, 1, client)
+    if not has_enough:
+        return False, "Insufficient data threshold"
+
+    return True, "Ready for summary generation"
+
+
+async def generate_summary_for_user(
+    user: str,
+    hours: int,
+    log_type: str,
+    client: Client | None = None,
+) -> Optional[dict]:
+    """Generate summary for a user with threshold checks and timestamp tracking.
+
+    This is the main entry point for per-user summary generation that:
+    1. Checks if user has enough data (threshold check)
+    2. Checks if enough time has passed since last summary (per-user timer)
+    3. Generates and stores the summary
+    4. Updates the last_summary_generated timestamp
+
+    Args:
+        user: User identifier
+        hours: Number of hours to summarize
+        log_type: Type of summary ("hourly" or "daily")
+        client: Optional Supabase client
+
+    Returns:
+        Summary log dict if generated, None otherwise
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    # For hourly summaries, check per-user timer
+    if log_type == "hourly":
+        is_ready, reason = await check_user_hourly_ready(user, client)
+        if not is_ready:
+            logger.debug(f"User {user} not ready for hourly summary: {reason}")
+            return None
+
+    # Check threshold
+    has_enough, compressed = await should_generate_summary(user, hours, client)
+    if not has_enough:
+        logger.debug(f"User {user} doesn't meet threshold for summary generation")
+        return None
+
+    # Generate summary
+    summary_log = await generate_summary(user, compressed, log_type=log_type)
+
+    if summary_log:
+        # Insert to database
+        await insert_summary_log(summary_log, client)
+
+        # Update last summary generated timestamp
+        await update_last_summary_generated(user, client)
+
+        return summary_log
+
+    return None

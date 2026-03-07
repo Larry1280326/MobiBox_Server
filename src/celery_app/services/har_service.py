@@ -2,6 +2,8 @@
 
 Uses TSFM (Time Series Foundation Model) for zero-shot activity recognition
 with fallback to legacy IMU transformer or mock model.
+
+Supports incremental processing via last processed timestamp tracking.
 """
 
 import asyncio
@@ -9,6 +11,7 @@ import logging
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -24,6 +27,11 @@ from src.celery_app.config import (
     HAR_IMU_MODEL_CONFIG,
     USE_TSFM_MODEL,
     TSFM_MIN_SAMPLES,
+)
+from src.celery_app.services.processing_state_service import (
+    get_last_processed,
+    update_last_processed,
+    get_imu_window_since,
 )
 
 logger = logging.getLogger(__name__)
@@ -289,13 +297,13 @@ async def insert_har_label(
     """
     Insert HAR label into the har table.
 
-    Database schema: har(id, timestamp, user, har_label)
+    Database schema: har(id, timestamp, user, har_label, confidence, source)
 
     Args:
         user: User identifier
         label: Activity label (stored as har_label)
-        confidence: Unused, kept for API compatibility
-        source: Unused, kept for API compatibility
+        confidence: Confidence score from model (0.0-1.0)
+        source: Source of label ('tsfm_model', 'imu_model', 'mock_har', 'insufficient_data')
         client: Optional Supabase client
 
     Returns:
@@ -307,6 +315,8 @@ async def insert_har_label(
     data = {
         "user": user,
         "har_label": label,
+        "confidence": round(confidence, 2),
+        "source": source,
         "timestamp": datetime.now(CHINA_TZ).isoformat(),
     }
 
@@ -354,3 +364,70 @@ async def process_har_for_user(user: str, client: Client | None = None) -> HARLa
         timestamp=datetime.now(CHINA_TZ),
         source=source,
     )
+
+
+async def process_har_for_user_incremental(
+    user: str,
+    client: Client | None = None,
+) -> tuple[HARLabel | None, datetime | None]:
+    """
+    Incremental HAR processing pipeline with timestamp tracking.
+
+    Only processes new IMU data since last processed timestamp.
+    Updates the last processed timestamp after successful processing.
+
+    Args:
+        user: User identifier
+        client: Optional Supabase client
+
+    Returns:
+        Tuple of (HARLabel if successful, latest timestamp processed)
+    """
+    if client is None:
+        client = get_supabase_client()
+
+    # Get last processed timestamp for this user
+    last_processed = await get_last_processed(user, "har", client)
+
+    if last_processed:
+        # Incremental: fetch only new data since last processed
+        imu_data = await get_imu_window_since(user, last_processed, client)
+        logger.debug(f"Processing HAR incrementally for {user} since {last_processed}")
+    else:
+        # First time: use standard windowed fetch
+        imu_data = await get_imu_window(user, HAR_IMU_WINDOW_SECONDS, client)
+        logger.debug(f"Processing HAR for {user} (first time, no last_processed)")
+
+    if not imu_data:
+        return None, None
+
+    # Run HAR model
+    label, confidence, source = await run_har_model(imu_data)
+
+    # Get the latest timestamp from the processed data
+    timestamps = [d.get("timestamp") for d in imu_data if d.get("timestamp")]
+    latest_timestamp = None
+    if timestamps:
+        # Parse the latest timestamp
+        ts_str = max(timestamps)
+        if isinstance(ts_str, str):
+            latest_timestamp = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        else:
+            latest_timestamp = ts_str
+
+    # Insert result
+    await insert_har_label(user, label, confidence, source, client)
+
+    # Update last processed timestamp
+    if latest_timestamp:
+        await update_last_processed(user, "har", latest_timestamp, client)
+
+    har_label = HARLabel(
+        user=user,
+        label=label,
+        confidence=confidence,
+        timestamp=datetime.now(CHINA_TZ),
+        source=source,
+    )
+
+    return har_label, latest_timestamp

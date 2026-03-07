@@ -13,6 +13,7 @@ class AtomicActivity(BaseModel):
     timestamp: datetime
     har_label: Optional[str] = Field(None, description="HAR activity label from LLM")
     app_category: Optional[str] = Field(None, description="App category from LLM")
+    app_name: Optional[str] = Field(None, description="The specific app that was used")
     step_label: Optional[str] = Field(None, description="Step activity label")
     phone_usage: Optional[str] = Field(None, description="Phone usage label")
     social_label: Optional[str] = Field(None, description="Social context label")

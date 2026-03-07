@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     celery_broker_url: str = "amqp://guest:guest@localhost:5672//"
     celery_result_backend: str = "rpc://"
 
+    # Baidu Maps API (optional, for location enrichment)
+    baidu_maps_api_key: str = ""
+    baidu_maps_enabled: bool = False
+
 
 class LLMSettings(BaseSettings):
     """LLM settings for Azure OpenAI integration."""

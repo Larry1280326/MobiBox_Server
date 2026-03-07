@@ -20,6 +20,10 @@ class SummaryLogRequest(BaseModel):
         pattern="^(hourly|daily)$",
         description="Type of summary log (hourly or daily)",
     )
+    last_log_id: Optional[int] = Field(
+        None,
+        description="ID of the last log received. If provided and no new log exists, returns None.",
+    )
 
 
 class SummaryLogItem(BaseModel):
@@ -37,6 +41,10 @@ class SummaryLogResponse(BaseModel):
 
     status: str = "success"
     data: Optional[SummaryLogItem] = Field(None, description="The most recent summary log")
+    has_new_log: bool = Field(
+        True,
+        description="True if there's a newer log than last_log_id, or if last_log_id wasn't provided",
+    )
 
 
 # ============================================================================

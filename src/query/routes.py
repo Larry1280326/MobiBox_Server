@@ -37,20 +37,27 @@ async def fetch_summary_log(request: SummaryLogRequest):
 
     Given a user ID and log type, returns the most recent summary log content,
     window timestamps, and generation timestamp.
+
+    Supports polling: provide last_log_id to detect if there's a new log.
+    - If last_log_id is provided and matches the latest log ID, returns has_new_log=False with data=None
+    - If there's a newer log, returns has_new_log=True with the new log data
+    - If last_log_id is not provided, returns the latest log (has_new_log=True)
     """
     try:
-        record = await get_summary_logs(
+        record, has_new_log = await get_summary_logs(
             user=request.user,
             log_type=request.log_type,
+            last_log_id=request.last_log_id,
         )
 
         if record is None:
-            return SummaryLogResponse(status="success", data=None)
+            return SummaryLogResponse(status="success", data=None, has_new_log=has_new_log)
 
         formatted = format_summary_log(record)
         return SummaryLogResponse(
             status="success",
             data=SummaryLogItem(**formatted),
+            has_new_log=has_new_log,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
