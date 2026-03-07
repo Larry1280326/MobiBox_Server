@@ -1,9 +1,36 @@
--- Migration: Add log feedback fields
+-- Migration: Fix log feedback user column and add structured fields
 -- Created: 2026-03-07
--- Description: Add fields for structured log feedback (Q1-Q4, ground truth, suggestions)
+-- Description: Fix user column type and add fields for structured log feedback (Q1-Q4, ground truth, suggestions)
 
 -- =============================================================================
--- 1. Add new columns to summary_log_feedbacks table
+-- 1. Drop the existing foreign key constraint on user column
+-- =============================================================================
+
+ALTER TABLE public.summary_log_feedbacks
+DROP CONSTRAINT IF EXISTS summary_log_feedbacks_user_fkey;
+
+-- =============================================================================
+-- 2. Change user column from bigint to varchar to match string user IDs
+-- =============================================================================
+
+-- First drop the NOT NULL constraint if it exists (user column may be nullable)
+ALTER TABLE public.summary_log_feedbacks
+ALTER COLUMN "user" DROP NOT NULL;
+
+-- Then change the type to varchar to match user.name
+ALTER TABLE public.summary_log_feedbacks
+ALTER COLUMN "user" TYPE character varying;
+
+-- =============================================================================
+-- 3. Add new foreign key constraint referencing user.name
+-- =============================================================================
+
+ALTER TABLE public.summary_log_feedbacks
+ADD CONSTRAINT summary_log_feedbacks_user_fkey
+FOREIGN KEY ("user") REFERENCES public.user(name);
+
+-- =============================================================================
+-- 4. Add new columns for structured feedback
 -- =============================================================================
 
 -- Add Q1-Q4 multiple choice answer columns
@@ -22,17 +49,10 @@ ALTER TABLE public.summary_log_feedbacks
 ADD COLUMN IF NOT EXISTS suggestions TEXT;
 
 -- =============================================================================
--- 2. Ensure user column can store string identifiers
+-- 5. Add comments for documentation
 -- =============================================================================
 
--- Alter user column to TEXT if it was INTEGER (for string user IDs like "samsumg_test")
-ALTER TABLE public.summary_log_feedbacks
-ALTER COLUMN "user" TYPE TEXT;
-
--- =============================================================================
--- 3. Add comments for documentation
--- =============================================================================
-
+COMMENT ON COLUMN public.summary_log_feedbacks."user" IS 'User identifier (string, references user.name)';
 COMMENT ON COLUMN public.summary_log_feedbacks.feedback IS 'General feedback text (for simple feedback)';
 COMMENT ON COLUMN public.summary_log_feedbacks.q1 IS 'Multiple choice answer for question 1';
 COMMENT ON COLUMN public.summary_log_feedbacks.q2 IS 'Multiple choice answer for question 2';
@@ -42,15 +62,8 @@ COMMENT ON COLUMN public.summary_log_feedbacks.ground_truth IS 'Standard answer 
 COMMENT ON COLUMN public.summary_log_feedbacks.suggestions IS 'Optimization suggestions from user';
 
 -- =============================================================================
--- 4. Create index for querying by summary_logs_id
+-- 6. Create index for querying by summary_logs_id
 -- =============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_summary_log_feedbacks_summary_logs_id
 ON public.summary_log_feedbacks(summary_logs_id);
-
--- =============================================================================
--- 5. Note: feedback column remains as optional for simple feedback use cases
--- =============================================================================
-
--- The feedback column is already nullable and can be used for simple text feedback
--- while q1-q4, ground_truth, suggestions are for structured feedback
