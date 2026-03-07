@@ -82,7 +82,7 @@ celery -A src.celery_app.celery_app beat --loglevel=info
 | Python 3.11 | Runtime environment |
 | [Docker](https://www.docker.com/) | Running RabbitMQ |
 | [Supabase](https://supabase.com/) | Database backend |
-| Azure OpenAI API | LLM integration for interventions |
+| [OpenRouter](https://openrouter.ai/) API | LLM integration for interventions |
 
 ### Configuration
 
@@ -104,18 +104,25 @@ SUPABASE_ANON_KEY=your-anon-key-here
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here  # Optional, for admin operations
 ```
 
-#### Azure OpenAI Configuration (for LLM features)
+#### OpenRouter LLM Configuration (for LLM features)
 
-1. Get your Azure OpenAI credentials from [HKUST Azure OpenAI Service](https://itso.hkust.edu.hk/services/it-infrastructure/azure-openai-api-service)
+1. Get your OpenRouter API key from [OpenRouter Keys](https://openrouter.ai/keys)
 2. Update `.env`:
 
 ```env
-AZURE_OPENAI_API_KEY=your-api-key-here
-AZURE_OPENAI_ENDPOINT=https://hkust.azure-api.net
-AZURE_OPENAI_API_VERSION=2024-10-01-preview
-AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
+OPENROUTER_API_KEY=your-api-key-here
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=qwen/qwen3-vl-30b-a3b-thinking
 DEFAULT_TEMPERATURE=0.1
 ```
+
+**Free Models Available:**
+- `qwen/qwen3-vl-30b-a3b-thinking` (recommended)
+- `meta-llama/llama-3.2-3b-instruct:free`
+- `google/gemma-2-9b-it:free`
+- `mistralai/mistral-7b-instruct:free`
+
+See [OpenRouter Models](https://openrouter.ai/models) for all available models.
 
 #### RabbitMQ / Celery Configuration
 

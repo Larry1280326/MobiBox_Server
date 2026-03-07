@@ -1,6 +1,6 @@
-"""Integration tests for Azure OpenAI API with gpt-4o-mini.
+"""Integration tests for OpenRouter API.
 
-These tests require actual Azure OpenAI credentials and will make real API calls.
+These tests require actual OpenRouter credentials and will make real API calls.
 Run with: pytest -m integration src/test/test_llm_integration.py
 
 Note: These tests consume API credits and should be run sparingly.
@@ -29,36 +29,35 @@ class AnswerSchema(BaseModel):
     confidence: float
 
 
-class TestAzureOpenAIConnection:
-    """Tests to verify Azure OpenAI API connectivity."""
+class TestOpenRouterConnection:
+    """Tests to verify OpenRouter API connectivity."""
 
     def test_llm_settings_loaded(self):
         """Verify LLM settings are loaded from environment."""
         settings = get_llm_settings()
 
-        assert settings.azure_openai_api_key, "AZURE_OPENAI_API_KEY not set"
-        assert settings.azure_openai_endpoint, "AZURE_OPENAI_ENDPOINT not set"
-        assert settings.azure_openai_deployment == "gpt-4o-mini", \
-            f"Expected deployment 'gpt-4o-mini', got '{settings.azure_openai_deployment}'"
-        assert settings.azure_openai_api_version, "AZURE_OPENAI_API_VERSION not set"
+        assert settings.openrouter_api_key, "OPENROUTER_API_KEY not set"
+        assert settings.openrouter_base_url, "OPENROUTER_BASE_URL not set"
+        assert settings.openrouter_model, "OPENROUTER_MODEL not set"
 
     def test_get_llm_creates_client(self):
-        """Verify LLM client can be created with gpt-4o-mini."""
+        """Verify LLM client can be created."""
         llm = get_llm()
 
         assert llm is not None
-        assert llm.deployment_name == "gpt-4o-mini"
+        settings = get_llm_settings()
+        assert llm.model_name == settings.openrouter_model
 
     def test_get_llm_with_custom_model(self):
-        """Verify LLM client can be created with custom model type."""
-        llm = get_llm(model_type="gpt-4o")
+        """Verify LLM client can be created with custom model."""
+        llm = get_llm(model_type="meta-llama/llama-3.2-3b-instruct:free")
 
         assert llm is not None
-        assert llm.deployment_name == "gpt-4o"
+        assert llm.model_name == "meta-llama/llama-3.2-3b-instruct:free"
 
 
 class TestQueryLlmIntegration:
-    """Integration tests for query_llm with real Azure OpenAI API."""
+    """Integration tests for query_llm with real OpenRouter API."""
 
     @pytest.mark.asyncio
     async def test_simple_query_returns_response(self):
@@ -101,7 +100,7 @@ class TestQueryLlmIntegration:
 
 
 class TestGenerateStructuredOutputIntegration:
-    """Integration tests for structured output with real Azure OpenAI API."""
+    """Integration tests for structured output with real OpenRouter API."""
 
     @pytest.mark.asyncio
     async def test_structured_output_basic(self):
@@ -142,7 +141,7 @@ class TestGenerateStructuredOutputIntegration:
 
 
 class TestSummarizeLongTextIntegration:
-    """Integration tests for summarize_long_text with real Azure OpenAI API."""
+    """Integration tests for summarize_long_text with real OpenRouter API."""
 
     @pytest.mark.asyncio
     async def test_summarize_short_text(self):
@@ -197,23 +196,20 @@ class TestSummarizeLongTextIntegration:
         assert len(result) < len(long_text)
 
 
-class TestGpt4oMiniDeployment:
-    """Tests to verify gpt-4o-mini is correctly configured for cost savings."""
+class TestFreeModelConfiguration:
+    """Tests to verify free model configuration."""
 
     @pytest.mark.asyncio
-    async def test_deployment_is_gpt_4o_mini(self):
-        """Verify the deployment name is gpt-4o-mini for cost savings."""
+    async def test_model_is_configured(self):
+        """Verify the model is correctly configured."""
         settings = get_llm_settings()
 
-        # Verify we're using the cheaper model
-        assert settings.azure_openai_deployment == "gpt-4o-mini", (
-            f"Expected 'gpt-4o-mini' for cost savings, got '{settings.azure_openai_deployment}'"
-        )
+        # Verify we have a model configured
+        assert settings.openrouter_model, "OPENROUTER_MODEL should be set"
 
     @pytest.mark.asyncio
     async def test_model_capability_sufficient(self):
-        """Test that gpt-4o-mini has sufficient capability for typical tasks."""
-        # gpt-4o-mini should be capable of this simple structured output task
+        """Test that the model has sufficient capability for typical tasks."""
         class SimpleResponse(BaseModel):
             message: str
 

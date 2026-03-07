@@ -23,7 +23,7 @@ class SampleOutputSchema(BaseModel):
 @pytest.fixture
 def mock_rate_limiter():
     """Mock rate limiter to bypass rate limiting in tests."""
-    with patch("src.llm_utils.services._azure_rate_limiter") as mock:
+    with patch("src.llm_utils.services._rate_limiter") as mock:
         mock.acquire = AsyncMock()
         yield mock
 
@@ -33,19 +33,20 @@ def mock_llm_settings():
     """Mock LLM settings for testing."""
     with patch("src.llm_utils.services.get_llm_settings") as mock:
         settings = MagicMock()
-        settings.azure_openai_api_key = "test-api-key"
-        settings.azure_openai_endpoint = "https://test.azure-api.net"
-        settings.azure_openai_api_version = "2024-10-01-preview"
-        settings.azure_openai_deployment = "gpt-4o-mini"
+        settings.openrouter_api_key = "test-api-key"
+        settings.openrouter_base_url = "https://openrouter.ai/api/v1"
+        settings.openrouter_model = "qwen/qwen3-vl-30b-a3b-thinking"
+        settings.openrouter_site_url = "http://localhost:8000"
+        settings.openrouter_app_name = "MobiBox"
         settings.default_temperature = 0.1
         mock.return_value = settings
         yield mock
 
 
 @pytest.fixture
-def mock_azure_chat_openai():
-    """Mock AzureChatOpenAI LLM instance."""
-    with patch("src.llm_utils.services.AzureChatOpenAI") as mock_llm_class:
+def mock_chat_openai():
+    """Mock ChatOpenAI LLM instance."""
+    with patch("src.llm_utils.services.ChatOpenAI") as mock_llm_class:
         mock_llm_instance = MagicMock()
         mock_llm_class.return_value = mock_llm_instance
         yield mock_llm_class, mock_llm_instance
@@ -54,36 +55,35 @@ def mock_azure_chat_openai():
 class TestGetLlm:
     """Tests for get_llm function."""
 
-    def test_get_llm_with_defaults(self, mock_llm_settings, mock_azure_chat_openai):
+    def test_get_llm_with_defaults(self, mock_llm_settings, mock_chat_openai):
         """get_llm creates LLM with default settings."""
-        mock_class, mock_instance = mock_azure_chat_openai
+        mock_class, mock_instance = mock_chat_openai
 
         result = get_llm()
 
         mock_class.assert_called_once()
         call_kwargs = mock_class.call_args.kwargs
-        assert call_kwargs["azure_deployment"] == "gpt-4o-mini"
-        assert call_kwargs["api_version"] == "2024-10-01-preview"
+        assert call_kwargs["model"] == "qwen/qwen3-vl-30b-a3b-thinking"
         assert call_kwargs["temperature"] == 0.1
         assert call_kwargs["api_key"] == "test-api-key"
-        assert call_kwargs["azure_endpoint"] == "https://test.azure-api.net"
+        assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
+        assert "HTTP-Referer" in call_kwargs["default_headers"]
+        assert "X-Title" in call_kwargs["default_headers"]
         assert result == mock_instance
 
-    def test_get_llm_with_custom_params(self, mock_llm_settings, mock_azure_chat_openai):
+    def test_get_llm_with_custom_params(self, mock_llm_settings, mock_chat_openai):
         """get_llm uses custom parameters when provided."""
-        mock_class, mock_instance = mock_azure_chat_openai
+        mock_class, mock_instance = mock_chat_openai
 
         result = get_llm(
-            model_type="gpt-35-turbo",
-            api_version="2024-01-01",
+            model_type="meta-llama/llama-3.2-3b-instruct:free",
             temperature=0.5,
             max_tokens=1000,
             max_retries=5,
         )
 
         call_kwargs = mock_class.call_args.kwargs
-        assert call_kwargs["azure_deployment"] == "gpt-35-turbo"
-        assert call_kwargs["api_version"] == "2024-01-01"
+        assert call_kwargs["model"] == "meta-llama/llama-3.2-3b-instruct:free"
         assert call_kwargs["temperature"] == 0.5
         assert call_kwargs["max_tokens"] == 1000
         assert call_kwargs["max_retries"] == 5
@@ -94,9 +94,9 @@ class TestQueryLlm:
     """Tests for query_llm function."""
 
     @pytest.mark.asyncio
-    async def test_query_llm_returns_result(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
+    async def test_query_llm_returns_result(self, mock_rate_limiter, mock_llm_settings, mock_chat_openai):
         """query_llm returns the generated text."""
-        mock_class, mock_instance = mock_azure_chat_openai
+        mock_class, mock_instance = mock_chat_openai
 
         # Mock the chain
         mock_chain = MagicMock()
@@ -125,9 +125,9 @@ class TestQueryLlm:
         assert result == "Generated text result"
 
     @pytest.mark.asyncio
-    async def test_generate_text_with_custom_params(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
+    async def test_generate_text_with_custom_params(self, mock_rate_limiter, mock_llm_settings, mock_chat_openai):
         """generate_text passes custom parameters to get_llm."""
-        mock_class, mock_instance = mock_azure_chat_openai
+        mock_class, mock_instance = mock_chat_openai
 
         mock_chain = MagicMock()
         mock_chain.ainvoke = AsyncMock(return_value="Result")
@@ -142,13 +142,13 @@ class TestQueryLlm:
                 await query_llm(
                     system_prompt="System",
                     user_prompt="User",
-                    model_type="gpt-35-turbo",
+                    model_type="meta-llama/llama-3.2-3b-instruct:free",
                     temperature=0.7,
                 )
 
-        # Verify get_llm was called with custom params (via AzureChatOpenAI constructor)
+        # Verify get_llm was called with custom params (via ChatOpenAI constructor)
         call_kwargs = mock_class.call_args.kwargs
-        assert call_kwargs["azure_deployment"] == "gpt-35-turbo"
+        assert call_kwargs["model"] == "meta-llama/llama-3.2-3b-instruct:free"
         assert call_kwargs["temperature"] == 0.7
 
 
@@ -156,9 +156,9 @@ class TestGenerateStructuredOutput:
     """Tests for generate_structured_output function."""
 
     @pytest.mark.asyncio
-    async def test_generate_structured_output_returns_schema(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
+    async def test_generate_structured_output_returns_schema(self, mock_rate_limiter, mock_llm_settings, mock_chat_openai):
         """generate_structured_output returns structured Pydantic model."""
-        mock_class, mock_instance = mock_azure_chat_openai
+        mock_class, mock_instance = mock_chat_openai
 
         expected_result = SampleOutputSchema(title="Test Title", content="Test Content")
 
@@ -184,9 +184,9 @@ class TestGenerateStructuredOutput:
         assert result.content == "Test Content"
 
     @pytest.mark.asyncio
-    async def test_generate_structured_output_uses_schema(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
+    async def test_generate_structured_output_uses_schema(self, mock_rate_limiter, mock_llm_settings, mock_chat_openai):
         """generate_structured_output calls with_structured_output with correct schema."""
-        mock_class, mock_instance = mock_azure_chat_openai
+        mock_class, mock_instance = mock_chat_openai
 
         mock_structured_chain = MagicMock()
         mock_structured_chain.ainvoke = AsyncMock(return_value=SampleOutputSchema(title="T", content="C"))
@@ -213,9 +213,9 @@ class TestSummarizeLongText:
     """Tests for summarize_long_text function."""
 
     @pytest.mark.asyncio
-    async def test_summarize_short_text(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
+    async def test_summarize_short_text(self, mock_rate_limiter, mock_llm_settings, mock_chat_openai):
         """summarize_long_text processes short text without chunking."""
-        mock_class, mock_instance = mock_azure_chat_openai
+        mock_class, mock_instance = mock_chat_openai
 
         short_text = "This is a short text."
 
@@ -242,9 +242,9 @@ class TestSummarizeLongText:
         assert result == "Summary result"
 
     @pytest.mark.asyncio
-    async def test_summarize_long_text_chunks_content(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
+    async def test_summarize_long_text_chunks_content(self, mock_rate_limiter, mock_llm_settings, mock_chat_openai):
         """summarize_long_text splits long text into chunks and processes sequentially."""
-        mock_class, mock_instance = mock_azure_chat_openai
+        mock_class, mock_instance = mock_chat_openai
 
         long_text = "Long content " * 500
 
@@ -276,9 +276,9 @@ class TestSummarizeLongText:
         assert result == "Final combined summary"
 
     @pytest.mark.asyncio
-    async def test_summarize_uses_custom_params(self, mock_rate_limiter, mock_llm_settings, mock_azure_chat_openai):
+    async def test_summarize_uses_custom_params(self, mock_rate_limiter, mock_llm_settings, mock_chat_openai):
         """summarize_long_text passes custom parameters."""
-        mock_class, mock_instance = mock_azure_chat_openai
+        mock_class, mock_instance = mock_chat_openai
 
         mock_chain = MagicMock()
         mock_chain.ainvoke = AsyncMock(return_value="Summary")
@@ -298,10 +298,10 @@ class TestSummarizeLongText:
                     await summarize_long_text(
                         content="Content",
                         instruction="Summarize.",
-                        model_type="gpt-35-turbo",
+                        model_type="meta-llama/llama-3.2-3b-instruct:free",
                         temperature=0.5,
                     )
 
         call_kwargs = mock_class.call_args.kwargs
-        assert call_kwargs["azure_deployment"] == "gpt-35-turbo"
+        assert call_kwargs["model"] == "meta-llama/llama-3.2-3b-instruct:free"
         assert call_kwargs["temperature"] == 0.5

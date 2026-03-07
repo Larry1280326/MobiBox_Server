@@ -48,7 +48,7 @@ class Settings(BaseSettings):
 
 
 class LLMSettings(BaseSettings):
-    """LLM settings for Azure OpenAI integration."""
+    """LLM settings for OpenRouter integration."""
 
     model_config = ConfigDict(
         env_file=".env",
@@ -56,11 +56,19 @@ class LLMSettings(BaseSettings):
         extra="ignore",
     )
 
-    azure_openai_api_key: str
+    # OpenRouter API (OpenAI-compatible)
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "qwen/qwen3-vl-30b-a3b-thinking"  # Free model
+    openrouter_site_url: str = "http://localhost:8000"  # Optional, for rankings
+    openrouter_app_name: str = "MobiBox"  # Optional, for rankings
+    default_temperature: float = 0.1
+
+    # Legacy Azure settings (kept for backward compatibility)
+    azure_openai_api_key: str = ""
     azure_openai_endpoint: str = "https://hkust.azure-api.net"
     azure_openai_api_version: str = "2024-10-01-preview"
     azure_openai_deployment: str = "gpt-4o-mini"
-    default_temperature: float = 0.1
 
 
 @lru_cache

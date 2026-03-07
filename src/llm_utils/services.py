@@ -1,14 +1,16 @@
 """
-LLM service utilities for Azure OpenAI integration.
+LLM service utilities for OpenRouter integration.
 Provides reusable functions for text generation and structured output.
-Includes rate limiting to stay within Azure API limits (60 requests/minute).
+Includes rate limiting to stay within API limits.
+
+OpenRouter provides an OpenAI-compatible API, so we use ChatOpenAI from langchain.
 """
 
 import asyncio
 import time
 from typing import Type, TypeVar
 from pydantic import BaseModel
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -21,7 +23,7 @@ T = TypeVar("T", bound=BaseModel)
 
 class RateLimiter:
     """
-    Token bucket rate limiter for Azure API calls.
+    Token bucket rate limiter for API calls.
     Ensures requests stay within the specified rate limit.
     """
 
@@ -44,41 +46,45 @@ class RateLimiter:
             self._last_request_time = time.monotonic()
 
 
-# Global rate limiter instance (60 requests per minute for Azure API)
-_azure_rate_limiter = RateLimiter(requests_per_minute=60)
+# Global rate limiter instance (60 requests per minute)
+_rate_limiter = RateLimiter(requests_per_minute=60)
 
 
 def get_llm(
     model_type: str | None = None,
-    api_version: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
     max_retries: int = 2,
-) -> AzureChatOpenAI:
+) -> ChatOpenAI:
     """
-    Create an AzureChatOpenAI instance with configured settings.
+    Create a ChatOpenAI instance configured for OpenRouter.
+
+    OpenRouter uses an OpenAI-compatible API, so we can use ChatOpenAI
+    with a custom base_url.
 
     Args:
-        model_type: Azure deployment name (defaults to configured deployment)
-        api_version: Azure API version (defaults to configured version)
+        model_type: Model name (defaults to configured OpenRouter model)
         temperature: Sampling temperature (defaults to configured temperature)
         max_tokens: Maximum tokens to generate
         max_retries: Number of retries on failure
 
     Returns:
-        Configured AzureChatOpenAI instance
+        Configured ChatOpenAI instance
     """
     settings = get_llm_settings()
 
-    return AzureChatOpenAI(
-        azure_deployment=model_type or settings.azure_openai_deployment,
-        api_version=api_version or settings.azure_openai_api_version,
+    return ChatOpenAI(
+        model=model_type or settings.openrouter_model,
         temperature=temperature if temperature is not None else settings.default_temperature,
         max_tokens=max_tokens,
         timeout=None,
         max_retries=max_retries,
-        api_key=settings.azure_openai_api_key,
-        azure_endpoint=settings.azure_openai_endpoint,
+        api_key=settings.openrouter_api_key,
+        base_url=settings.openrouter_base_url,
+        default_headers={
+            "HTTP-Referer": settings.openrouter_site_url,
+            "X-Title": settings.openrouter_app_name,
+        },
     )
 
 
@@ -86,27 +92,24 @@ async def query_llm(
     system_prompt: str,
     user_prompt: str,
     model_type: str | None = None,
-    api_version: str | None = None,
     temperature: float | None = None,
 ) -> str:
     """
-    Generate text using Azure OpenAI with a simple prompt structure.
+    Generate text using OpenRouter with a simple prompt structure.
 
     Args:
         system_prompt: System instruction prompt
         user_prompt: User input prompt
-        model_type: Azure deployment name
-        api_version: Azure API version
+        model_type: Model name to use
         temperature: Sampling temperature
 
     Returns:
         Generated text string
     """
-    await _azure_rate_limiter.acquire()
+    await _rate_limiter.acquire()
 
     llm = get_llm(
         model_type=model_type,
-        api_version=api_version,
         temperature=temperature,
     )
 
@@ -126,28 +129,28 @@ async def generate_structured_output(
     user_prompt: str,
     output_schema: Type[T],
     model_type: str | None = None,
-    api_version: str | None = None,
     temperature: float | None = None,
 ) -> T:
     """
-    Generate structured output using Azure OpenAI with Pydantic schema.
+    Generate structured output using OpenRouter with Pydantic schema.
+
+    Note: Not all models support structured output. For models that don't,
+    consider using query_llm with JSON mode or manual parsing.
 
     Args:
         system_prompt: System instruction prompt
         user_prompt: User input prompt
         output_schema: Pydantic model class for structured output
-        model_type: Azure deployment name
-        api_version: Azure API version
+        model_type: Model name to use
         temperature: Sampling temperature
 
     Returns:
         Instance of the output_schema Pydantic model
     """
-    await _azure_rate_limiter.acquire()
+    await _rate_limiter.acquire()
 
     llm = get_llm(
         model_type=model_type,
-        api_version=api_version,
         temperature=temperature,
     )
 
@@ -156,14 +159,41 @@ async def generate_structured_output(
         ("user", user_prompt),
     ])
 
-    chain = prompt | llm.with_structured_output(
-        schema=output_schema,
-        include_raw=False,
-    )
+    # Use with_structured_output for models that support it
+    # Falls back to JSON mode if not supported
+    try:
+        chain = prompt | llm.with_structured_output(
+            schema=output_schema,
+            include_raw=False,
+        )
+        result = await chain.ainvoke({})
+        return result
+    except Exception as e:
+        # Fallback: use JSON mode and parse manually
+        import json
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Structured output not supported, using JSON fallback: {e}")
 
-    result = await chain.ainvoke({})
+        llm_json = get_llm(
+            model_type=model_type,
+            temperature=temperature,
+        )
+        llm_json.model_kwargs = {"response_format": {"type": "json_object"}}
 
-    return result
+        # Update system prompt to request JSON
+        json_system_prompt = f"{system_prompt}\n\nYou must respond with valid JSON only."
+
+        chain = ChatPromptTemplate.from_messages([
+            ("system", json_system_prompt),
+            ("user", user_prompt),
+        ]) | llm_json | StrOutputParser()
+
+        result_str = await chain.ainvoke({})
+
+        # Parse JSON and create Pydantic model
+        result_dict = json.loads(result_str)
+        return output_schema(**result_dict)
 
 
 async def summarize_long_text(
@@ -172,7 +202,6 @@ async def summarize_long_text(
     chunk_size: int = 3000,
     chunk_overlap: int = 50,
     model_type: str | None = None,
-    api_version: str | None = None,
     temperature: float | None = None,
 ) -> str:
     """
@@ -186,8 +215,7 @@ async def summarize_long_text(
         instruction: Summary instruction prompt
         chunk_size: Size of text chunks
         chunk_overlap: Overlap between chunks
-        model_type: Azure deployment name
-        api_version: Azure API version
+        model_type: Model name to use
         temperature: Sampling temperature
 
     Returns:
@@ -195,7 +223,6 @@ async def summarize_long_text(
     """
     llm = get_llm(
         model_type=model_type,
-        api_version=api_version,
         temperature=temperature,
     )
 
@@ -215,7 +242,7 @@ async def summarize_long_text(
     # Process chunks sequentially to respect rate limits
     generations = []
     for chunk in inputs:
-        await _azure_rate_limiter.acquire()
+        await _rate_limiter.acquire()
         result = await chain.ainvoke({"content": chunk})
         generations.append(result)
 
@@ -224,7 +251,7 @@ async def summarize_long_text(
 
     if len(inputs) > 1:
         # Final summarization pass
-        await _azure_rate_limiter.acquire()
+        await _rate_limiter.acquire()
         final_result = await chain.ainvoke({"content": intermediate_summary})
         return final_result
 
