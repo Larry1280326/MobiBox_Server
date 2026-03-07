@@ -73,6 +73,7 @@ celery_app.conf.update(
         "src.celery_app.tasks.har_tasks.*": {"queue": "har"},
         "src.celery_app.tasks.atomic_tasks.*": {"queue": "atomic"},
         "src.celery_app.tasks.summary_tasks.*": {"queue": "summary"},
+        "src.celery_app.tasks.archive_tasks.*": {"queue": "archive"},
     },
     # Default queue
     task_default_queue="default",
@@ -83,4 +84,5 @@ celery_app.autodiscover_tasks([
     "src.celery_app.tasks.har_tasks",
     "src.celery_app.tasks.atomic_tasks",
     "src.celery_app.tasks.summary_tasks",
+    "src.celery_app.tasks.archive_tasks",
 ])

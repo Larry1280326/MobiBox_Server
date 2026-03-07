@@ -71,6 +71,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "generate_daily_summary",
         "schedule": crontab(hour=0, minute=0),  # Midnight
     },
+    # Data archival - runs daily at 3 AM (low traffic time)
+    "daily-archival": {
+        "task": "archive_data_periodic",
+        "schedule": crontab(hour=3, minute=0),  # 3 AM daily
+    },
 }
 
 # =============================================================================

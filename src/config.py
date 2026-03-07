@@ -31,6 +31,21 @@ class Settings(BaseSettings):
     baidu_maps_api_key: str = ""
     baidu_maps_enabled: bool = False
 
+    # Storage Configuration
+    storage_bucket: str = "mobibox-archive"  # Supabase storage bucket name
+
+    # Data Retention Configuration (in days)
+    retention_imu_days: int = 7  # IMU data retention
+    retention_uploads_days: int = 30  # Uploads retention
+    retention_har_days: int = 30  # HAR labels retention
+    retention_atomic_days: int = 30  # Atomic activities retention
+    retention_summary_logs_days: int = 90  # Summary logs retention
+    retention_interventions_days: int = 90  # Interventions retention
+
+    # Archival Configuration
+    archive_enabled: bool = True  # Enable/disable archival
+    archive_batch_size: int = 10000  # Records per batch
+
 
 class LLMSettings(BaseSettings):
     """LLM settings for Azure OpenAI integration."""
