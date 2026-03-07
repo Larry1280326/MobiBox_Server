@@ -58,14 +58,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "src.celery_app.tasks.atomic_tasks.process_atomic_periodic",
         "schedule": 10.0,  # Every 10 seconds
     },
-    # DEBUG: Changed from hourly to every minute for debugging
+    # TESTING: Run every 30 seconds for quick testing (restore to crontab(minute='*') for production)
     "hourly-summary": {
         "task": "generate_hourly_summary",
-        "schedule": crontab(minute='*'),  # Every minute (was: minute=0 for hourly)
+        "schedule": 30.0,  # Every 30 seconds for testing (was: every minute)
     },
     "hourly-interventions": {
         "task": "generate_hourly_interventions",
-        "schedule": crontab(minute='*'),  # Every minute (was: minute=5 for hourly)
+        "schedule": 30.0,  # Every 30 seconds for testing (was: every minute)
     },
     "daily-summary": {
         "task": "generate_daily_summary",
@@ -83,9 +83,11 @@ CELERY_BEAT_SCHEDULE = {
 # =============================================================================
 
 # Minimum data required before generating a summary log
-MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG = 60  # At least 60 atomic records (10s each = 10min of data)
-MIN_UNIQUE_LABELS_FOR_LOG = 3  # At least 3 unique activity types
+# TEMPORARILY REDUCED FOR TESTING - restore to original values after testing
+MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG = 10  # At least 10 atomic records (was: 60)
+MIN_UNIQUE_LABELS_FOR_LOG = 1  # At least 1 unique activity type (was: 3)
 
 # Per-user hourly timer settings
-MIN_DATA_COLLECTION_HOURS = 1  # Minimum hours of data collection before generating first summary
-MIN_HOURS_BETWEEN_SUMMARIES = 1  # Minimum hours between summary generations
+# TEMPORARILY REDUCED FOR TESTING - restore to original values after testing
+MIN_DATA_COLLECTION_HOURS = 0.05  # ~3 minutes for testing (was: 1 hour)
+MIN_HOURS_BETWEEN_SUMMARIES = 0.03  # ~2 minutes for testing (was: 1 hour)
