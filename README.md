@@ -382,7 +382,7 @@ celery -A src.celery_app.celery_app inspect registered
 |-------|----------|
 | `Connection refused` to RabbitMQ | Ensure RabbitMQ is running: `docker ps \| grep rabbitmq` |
 | Celery tasks not executing | Check worker logs for errors, verify environment variables |
-| LLM errors | Verify `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` in `.env` |
+| LLM errors | Verify `OPENROUTER_API_KEY` in `.env` |
 | Supabase connection errors | Verify `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.env` |
 | Port 8000 already in use | Kill existing process: `lsof -i :8000` then `kill -9 <PID>` |
 
@@ -656,6 +656,9 @@ MobiBox_server/
 | supabase | Supabase Python client |
 | celery | Distributed task queue |
 | celery-beat | Celery scheduler for periodic tasks |
+| langchain-openai | LLM integration via OpenRouter |
+| langchain-core | Core LangChain utilities |
+| langchain-text-splitters | Text chunking for summarization |
 | pytest | Testing framework |
 | pytest-asyncio | Async testing support |
 | python-dotenv | Environment variable management |
@@ -857,6 +860,79 @@ IMU Data (N samples × 9 channels)
 ```
 
 For detailed TSFM documentation, see [docs/TSFM_INTEGRATION.md](docs/TSFM_INTEGRATION.md).
+
+## LLM Integration
+
+The backend uses OpenRouter API for LLM-powered features like health interventions and activity summaries. OpenRouter provides an OpenAI-compatible API with access to many models including free tiers.
+
+### Supported Models
+
+| Model | Type | Use Case |
+|-------|------|----------|
+| `qwen/qwen3-vl-30b-a3b-thinking` | Free | Recommended for structured output |
+| `meta-llama/llama-3.2-3b-instruct:free` | Free | Fast responses |
+| `google/gemma-2-9b-it:free` | Free | General purpose |
+| `mistralai/mistral-7b-instruct:free` | Free | Balanced |
+
+See [OpenRouter Models](https://openrouter.ai/models) for all available models.
+
+### Configuration
+
+```env
+# Required
+OPENROUTER_API_KEY=sk-or-...
+
+# Optional (defaults shown)
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=qwen/qwen3-vl-30b-a3b-thinking
+DEFAULT_TEMPERATURE=0.1
+```
+
+### LLM Service Functions
+
+The `src/llm_utils/services.py` module provides:
+
+| Function | Description |
+|----------|-------------|
+| `get_llm()` | Create configured ChatOpenAI instance |
+| `query_llm()` | Simple text generation |
+| `generate_structured_output()` | Pydantic schema-based output |
+| `summarize_long_text()` | Chunked summarization for long content |
+
+### Rate Limiting
+
+Built-in rate limiting ensures API quotas are respected:
+- Default: 60 requests per minute
+- Configured in `RateLimiter` class
+
+### Usage Example
+
+```python
+from src.llm_utils.services import generate_structured_output
+from pydantic import BaseModel
+
+class Intervention(BaseModel):
+    message: str
+    priority: str
+
+result = await generate_structured_output(
+    system_prompt="You are a health advisor.",
+    user_prompt="Suggest an intervention for a sedentary user.",
+    output_schema=Intervention,
+    temperature=0.3,
+)
+print(result.message)
+```
+
+### Testing
+
+```bash
+# Run LLM unit tests (mocked)
+pytest src/test/test_llm_utils.py -v
+
+# Run LLM integration tests (requires OPENROUTER_API_KEY)
+pytest src/test/test_llm_integration.py -v -m integration
+```
 
 ## Feature Implementation Details
 
