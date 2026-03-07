@@ -93,6 +93,7 @@ async def query_llm(
     user_prompt: str,
     model_type: str | None = None,
     temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     """
     Generate text using OpenRouter with a simple prompt structure.
@@ -102,6 +103,7 @@ async def query_llm(
         user_prompt: User input prompt
         model_type: Model name to use
         temperature: Sampling temperature
+        max_tokens: Maximum tokens to generate
 
     Returns:
         Generated text string
@@ -111,6 +113,7 @@ async def query_llm(
     llm = get_llm(
         model_type=model_type,
         temperature=temperature,
+        max_tokens=max_tokens,
     )
 
     prompt = ChatPromptTemplate.from_messages([

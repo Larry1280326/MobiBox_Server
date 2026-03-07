@@ -41,11 +41,11 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip integration tests if Azure OpenAI credentials are not available."""
-    skip_reason = "Azure OpenAI credentials not available (set AZURE_OPENAI_API_KEY in .env)"
+    """Skip integration tests if LLM API credentials are not available."""
+    skip_reason = "LLM API credentials not available (set OPENROUTER_API_KEY in .env)"
 
-    # Check if API key is available (endpoint has a default value in config)
-    has_api_key = bool(os.getenv("AZURE_OPENAI_API_KEY"))
+    # Check if OpenRouter API key is available
+    has_api_key = bool(os.getenv("OPENROUTER_API_KEY"))
 
     if not has_api_key:
         skip_marker = pytest.mark.skip(reason=skip_reason)
