@@ -404,6 +404,11 @@ celery -A src.celery_app.celery_app inspect registered
   }
   ```
 
+**Important:** User IDs (`user` field) are **strings**, not integers. All API endpoints that accept a `user` parameter expect a string identifier (e.g., `"samsung_test"`, `"user123"`). This applies to:
+- Upload endpoints (`/upload/documents`, `/upload/imu`)
+- Query endpoints (`/get_summary_log`, `/get_intervention`)
+- Feedback endpoints (`/send_log_feedback`, `/send_intervention_feedback`)
+
 ### Data Upload
 - `POST /upload/documents` - Bulk upload document data
   ```json
