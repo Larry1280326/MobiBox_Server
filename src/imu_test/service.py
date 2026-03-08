@@ -26,9 +26,13 @@ async def predict_activity(request: IMUTestRequest, timeout_seconds: float = 10.
         IMUTestResponse with prediction and evaluation results
     """
     from src.celery_app.services.har_service import run_har_model
+    from src.celery_app.services.tsfm_service import is_tsfm_available
 
     # Convert IMUTestItem to dict format expected by HAR service
     imu_data = [item.model_dump() for item in request.imu_data]
+
+    logger.info(f"IMU test request: user={request.user}, samples={len(imu_data)}, ground_truth={request.ground_truth_label}")
+    logger.info(f"TSFM model available: {is_tsfm_available()}")
 
     # Run HAR model prediction with timeout
     try:
@@ -36,6 +40,7 @@ async def predict_activity(request: IMUTestRequest, timeout_seconds: float = 10.
             run_har_model(imu_data),
             timeout=timeout_seconds
         )
+        logger.info(f"Prediction result: label={predicted_label}, confidence={confidence}, source={source}")
     except asyncio.TimeoutError:
         logger.warning(f"Inference timeout after {timeout_seconds}s for user {request.user}")
         predicted_label = "unknown"

@@ -212,6 +212,7 @@ async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
     """
     # Check minimum samples
     if len(imu_data) < 1:
+        logger.warning("No IMU data provided, returning unknown")
         return "unknown", 0.5, "insufficient_data"
 
     # Try TSFM model first (if enabled)
@@ -219,23 +220,39 @@ async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
         try:
             from .tsfm_service import run_tsfm_inference, is_tsfm_available
 
-            if is_tsfm_available() and len(imu_data) >= TSFM_MIN_SAMPLES:
+            tsfm_available = is_tsfm_available()
+            logger.debug(f"TSFM model enabled, available: {tsfm_available}, samples: {len(imu_data)}, min_required: {TSFM_MIN_SAMPLES}")
+
+            if tsfm_available and len(imu_data) >= TSFM_MIN_SAMPLES:
+                logger.info(f"Running TSFM inference with {len(imu_data)} samples")
                 label, confidence, source = await asyncio.to_thread(
                     run_tsfm_inference, imu_data
                 )
+                logger.info(f"TSFM result: label={label}, confidence={confidence}")
                 return label, confidence, source
+            elif not tsfm_available:
+                logger.warning("TSFM model not available, falling back to legacy model")
+            elif len(imu_data) < TSFM_MIN_SAMPLES:
+                logger.warning(f"Not enough samples for TSFM: {len(imu_data)} < {TSFM_MIN_SAMPLES}, falling back")
         except Exception as e:
-            logger.warning(f"TSFM model failed, falling back to legacy: {e}")
+            logger.warning(f"TSFM model failed, falling back to legacy: {e}", exc_info=True)
+    else:
+        logger.debug("TSFM model disabled (USE_TSFM_MODEL=False)")
 
     # Fall back to legacy IMU transformer
     model, available = _get_imu_model()
     if available and model is not None:
+        logger.info(f"Running legacy IMU model inference with {len(imu_data)} samples")
         tensor = _imu_data_to_tensor(imu_data)
         pred_idx, confidence = await asyncio.to_thread(_run_imu_model_sync, tensor)
         label = HAR_LABEL_BY_INDEX[pred_idx] if pred_idx < len(HAR_LABEL_BY_INDEX) else "unknown"
+        logger.info(f"Legacy IMU model result: label={label}, confidence={confidence}")
         return label, round(confidence, 2), "imu_model"
+    else:
+        logger.warning("Legacy IMU model not available, using mock model")
 
     # Final fallback to mock model
+    logger.info(f"Running mock HAR model with {len(imu_data)} samples")
     label, confidence = await run_mock_har_model(imu_data)
     return label, confidence, "mock_har"
 
