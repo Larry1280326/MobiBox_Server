@@ -4,6 +4,13 @@ This service wraps the TSFM (Time Series Foundation Model) for inference
 in the MobiBox backend, providing zero-shot activity recognition from IMU data.
 """
 
+import os
+
+# Set offline mode before importing sentence_transformers to prevent network calls
+# Models must be pre-cached using: python scripts/download_sentence_transformers.py
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 import logging
 from pathlib import Path
 from typing import Optional, Tuple, List
@@ -131,7 +138,20 @@ def _get_tsfm_model():
         return _tsfm_model, _tsfm_label_bank, True, device
 
     except Exception as e:
+        error_msg = str(e)
         logger.error(f"Failed to load TSFM model: {e}", exc_info=True)
+
+        # Provide helpful error message for common issues
+        if "offline" in error_msg.lower() or "not found" in error_msg.lower() or "connection" in error_msg.lower():
+            logger.error(
+                "SOLUTION: Sentence-transformers models not cached. Run on server:\n"
+                "  python scripts/download_sentence_transformers.py\n"
+                "Or set environment variables:\n"
+                "  export HF_HUB_OFFLINE=1\n"
+                "  export TRANSFORMERS_OFFLINE=1\n"
+                "And ensure models are in ~/.cache/huggingface/hub/"
+            )
+
         _tsfm_available = False
         return None, None, False, None
 
