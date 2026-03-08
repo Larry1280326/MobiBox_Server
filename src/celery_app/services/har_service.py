@@ -288,6 +288,7 @@ async def run_mock_har_model(imu_data: list[dict]) -> tuple[str, float]:
     avg_magnitude = sum(acc_magnitudes) / len(acc_magnitudes) if acc_magnitudes else 0
 
     # Mock classification based on acceleration magnitude (returns DB enum values)
+    # NOTE: "unknown" removed to verify if mock model is being used
     if avg_magnitude < 0.5:
         label = random.choice(["sitting", "lying", "standing"])
         confidence = 0.7 + random.random() * 0.2
@@ -295,7 +296,7 @@ async def run_mock_har_model(imu_data: list[dict]) -> tuple[str, float]:
         label = random.choice(["walking", "standing", "sitting"])
         confidence = 0.6 + random.random() * 0.3
     elif avg_magnitude < 5.0:
-        label = random.choice(["walking", "climbing stairs", "unknown"])
+        label = random.choice(["walking", "climbing stairs", "running"])
         confidence = 0.5 + random.random() * 0.4
     else:
         label = random.choice(["running", "climbing stairs"])
