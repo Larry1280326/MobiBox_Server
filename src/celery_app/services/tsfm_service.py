@@ -102,6 +102,7 @@ def _get_tsfm_model():
 
     try:
         from .tsfm_model.model_loading import load_model, load_label_bank
+        from .tsfm_model.label_groups import LABEL_GROUPS
 
         # Use CPU to avoid MPS device issues with sentence-transformers
         # MPS can have issues with some transformer models due to placeholder storage
@@ -113,6 +114,13 @@ def _get_tsfm_model():
             checkpoint, device, hyperparams_path,
             text_encoder=model.text_encoder, verbose=True
         )
+
+        # Pre-warm the label bank by encoding all labels
+        # This ensures SentenceTransformer is fully loaded before inference
+        logger.info("Pre-warming label bank with all activity labels...")
+        all_labels = list(LABEL_GROUPS.keys())
+        label_bank.encode(all_labels, normalize=True)
+        logger.info(f"Label bank warmed up with {len(all_labels)} labels")
 
         _tsfm_model = model
         _tsfm_label_bank = label_bank
