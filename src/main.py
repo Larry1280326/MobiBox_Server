@@ -9,6 +9,7 @@ from src.logging_config import setup_api_logging
 from src.register import router as register_router
 from src.upload import router as upload_router
 from src.query import router as query_router
+from src.imu_test import router as imu_test_router
 
 # Configure rotational logging
 setup_api_logging()
@@ -34,6 +35,7 @@ app.add_middleware(
 app.include_router(register_router)
 app.include_router(upload_router)
 app.include_router(query_router)
+app.include_router(imu_test_router)
 
 
 @app.get("/health")
