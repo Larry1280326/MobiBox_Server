@@ -13,14 +13,17 @@ logger = logging.getLogger(__name__)
 # Table name for storing test results
 IMU_TEST_RESULTS_TABLE = "imu_test_results"
 
+# Timeout for inference (30s to allow for model loading on first request)
+DEFAULT_INFERENCE_TIMEOUT = 30.0
 
-async def predict_activity(request: IMUTestRequest, timeout_seconds: float = 10.0) -> IMUTestResponse:
+
+async def predict_activity(request: IMUTestRequest, timeout_seconds: float = DEFAULT_INFERENCE_TIMEOUT) -> IMUTestResponse:
     """
     Predict activity from IMU data using the HAR model.
 
     Args:
         request: IMU test request with user, optional ground truth, and IMU data
-        timeout_seconds: Maximum time to wait for inference (default: 10 seconds)
+        timeout_seconds: Maximum time to wait for inference (default: 30 seconds)
 
     Returns:
         IMUTestResponse with prediction and evaluation results
@@ -32,7 +35,14 @@ async def predict_activity(request: IMUTestRequest, timeout_seconds: float = 10.
     imu_data = [item.model_dump() for item in request.imu_data]
 
     logger.info(f"IMU test request: user={request.user}, samples={len(imu_data)}, ground_truth={request.ground_truth_label}")
-    logger.info(f"TSFM model available: {is_tsfm_available()}")
+
+    # Check model availability and log for debugging
+    tsfm_available = is_tsfm_available()
+    logger.info(f"TSFM model available: {tsfm_available}")
+
+    if not tsfm_available:
+        logger.warning("TSFM model not available - check if sentence-transformers models are cached. "
+                      "Set HF_HOME and SENTENCE_TRANSFORMERS_HOME environment variables.")
 
     # Run HAR model prediction with timeout
     try:
@@ -42,10 +52,16 @@ async def predict_activity(request: IMUTestRequest, timeout_seconds: float = 10.
         )
         logger.info(f"Prediction result: label={predicted_label}, confidence={confidence}, source={source}")
     except asyncio.TimeoutError:
-        logger.warning(f"Inference timeout after {timeout_seconds}s for user {request.user}")
+        logger.error(f"Inference timeout after {timeout_seconds}s for user {request.user}. "
+                    f"Model may need to be warmed up or models not cached properly.")
         predicted_label = "unknown"
         confidence = 0.0
         source = "timeout"
+    except Exception as e:
+        logger.error(f"Inference failed for user {request.user}: {e}", exc_info=True)
+        predicted_label = "unknown"
+        confidence = 0.0
+        source = "error"
 
     # Validate and normalize ground truth label
     ground_truth = request.validate_ground_truth_label()
