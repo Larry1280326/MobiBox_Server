@@ -16,6 +16,15 @@ VALID_ACTIVITY_LABELS = [
     "unknown",
 ]
 
+# Valid model sources
+VALID_MODEL_SOURCES = {
+    "tsfm_model": "TSFM (AI Model) - Zero-shot activity recognition",
+    "imu_model": "Legacy IMU Model - 7-class transformer classifier",
+    "mock_har": "Mock (Debug) - Random classification for testing",
+    "timeout": "Timeout - Inference exceeded time limit",
+    "insufficient_data": "Insufficient Data - Not enough samples provided",
+}
+
 
 class IMUTestItem(BaseModel):
     """Single IMU data point for testing."""
@@ -76,7 +85,10 @@ class IMUTestResponse(BaseModel):
     user: str
     predicted_label: str = Field(..., description="Predicted activity label")
     confidence: float = Field(..., description="Model confidence score (0.0 to 1.0)")
-    source: str = Field(..., description="Model source (tsfm_model, mock_har, etc.)")
+    source: str = Field(
+        ...,
+        description="Model source: tsfm_model (TSFM AI), imu_model (Legacy), mock_har (Debug), timeout, insufficient_data"
+    )
     ground_truth_label: Optional[str] = Field(
         default=None,
         description="Ground truth label if provided",
