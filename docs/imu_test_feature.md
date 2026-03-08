@@ -73,6 +73,8 @@ MobiBox_Server/
 │   ├── har_service.py       # HAR model orchestration (modified)
 │   └── tsfm_service.py       # TSFM model inference
 ├── src/celery_app/config.py # Configuration (TSFM_MIN_SAMPLES, etc.)
+├── src/test/
+│   └── test_imu_model_loading.py  # Unit tests for IMU model
 └── migrations/
     └── 006_imu_test_results.sql  # Database migration
 ```
@@ -541,11 +543,55 @@ scp -r ~/.cache/huggingface/hub/models--sentence-transformers--* root@server:~/.
 - `3487227` - feat: add IMU test endpoint for TSFM model evaluation
 - `b9fcdb2` - fix: remove "unknown" from mock model choices for debugging
 - `66cc9fa` - docs: add IMU test feature documentation and improve logging
+- `895b1a3` - test: add comprehensive tests for IMU model loading and inference
 
 **Frontend (MobiQA-Android):**
 - `ede3b22` - feat: add IMU test activity for model evaluation
 - `f8a08bb` - fix: use ScheduledExecutorService for accurate 50Hz IMU sampling
 - `58dca4d` - feat: display model source in IMU test results
+
+---
+
+## Testing
+
+### Test File Structure
+
+```
+src/test/
+└── test_imu_model_loading.py    # Comprehensive tests for IMU model
+```
+
+### Test Coverage
+
+The test suite covers:
+
+| Test Class | Description |
+|------------|-------------|
+| `TestTSFMModelLoading` | TSFM model loading, caching, checkpoint verification |
+| `TestLegacyIMUModelLoading` | Legacy IMU model path resolution and loading |
+| `TestModelFallbackChain` | HAR model fallback (TSFM → Legacy → Mock) |
+| `TestIMUTestEndpoint` | Request validation, label normalization |
+| `TestIMUDataConversion` | IMU data to numpy array conversion |
+| `TestLabelMapping` | TSFM label to MobiBox label mapping |
+
+### Running Tests
+
+```bash
+# Run all IMU model tests
+pytest src/test/test_imu_model_loading.py -v
+
+# Run with coverage
+pytest src/test/test_imu_model_loading.py --cov=src/celery_app/services --cov=src/imu_test
+
+# Run specific test class
+pytest src/test/test_imu_model_loading.py::TestTSFMModelLoading -v
+```
+
+### Test Requirements
+
+- Tests use `pytest` and `pytest-asyncio`
+- TSFM and legacy model tests skip gracefully if models not available
+- Tests are safe to run in CI/CD environments
 
 ---
 
