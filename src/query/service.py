@@ -196,8 +196,7 @@ async def submit_summary_log_feedback(
     feedback: Optional[str] = None,
     q1: Optional[str] = None,
     q2: Optional[str] = None,
-    q3: Optional[str] = None,
-    q4: Optional[str] = None,
+    q2_preference: Optional[str] = None,
     ground_truth: Optional[str] = None,
     suggestions: Optional[str] = None,
     client: Client | None = None,
@@ -209,10 +208,9 @@ async def submit_summary_log_feedback(
         user: User identifier (string)
         summary_logs_id: ID of the summary log being rated
         feedback: Simple feedback text (for basic use cases)
-        q1: Multiple choice answer for question 1
-        q2: Multiple choice answer for question 2
-        q3: Multiple choice answer for question 3
-        q4: Multiple choice answer for question 4
+        q1: Log quality/accuracy score (0-5)
+        q2: Content preference match (yes/no)
+        q2_preference: Comma-separated preference categories when Q2 is 'no'
         ground_truth: Standard answer provided by user
         suggestions: Optimization suggestions from user
         client: Optional Supabase client
@@ -229,8 +227,7 @@ async def submit_summary_log_feedback(
         "feedback": feedback,
         "q1": q1,
         "q2": q2,
-        "q3": q3,
-        "q4": q4,
+        "q2_preference": q2_preference,
         "ground_truth": ground_truth,
         "suggestions": suggestions,
     }

@@ -119,7 +119,7 @@ async def send_log_feedback(request: SummaryLogFeedbackRequest):
     Submit feedback for a summary log.
 
     Receives user feedback for a specific summary log and stores it in the database.
-    Supports both simple text feedback and structured feedback with Q1-Q4.
+    Supports both simple text feedback and structured feedback with Q1-Q2.
     """
     try:
         await submit_summary_log_feedback(
@@ -128,8 +128,7 @@ async def send_log_feedback(request: SummaryLogFeedbackRequest):
             feedback=request.feedback,
             q1=request.q1,
             q2=request.q2,
-            q3=request.q3,
-            q4=request.q4,
+            q2_preference=request.q2_preference,
             ground_truth=request.ground_truth,
             suggestions=request.suggestions,
         )
