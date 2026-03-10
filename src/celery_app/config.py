@@ -58,14 +58,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "src.celery_app.tasks.atomic_tasks.process_atomic_periodic",
         "schedule": 10.0,  # Every 10 seconds
     },
-    # TESTING: Run every 30 seconds for quick testing (restore to crontab(minute='*') for production)
+    # Summary and intervention generation every 20 minutes
     "hourly-summary": {
         "task": "generate_hourly_summary",
-        "schedule": 30.0,  # Every 30 seconds for testing (was: every minute)
+        "schedule": 1200.0,  # Every 20 minutes
     },
     "hourly-interventions": {
         "task": "generate_hourly_interventions",
-        "schedule": 30.0,  # Every 30 seconds for testing (was: every minute)
+        "schedule": 1200.0,  # Every 20 minutes
     },
     "daily-summary": {
         "task": "generate_daily_summary",
