@@ -130,7 +130,7 @@ else
     cd "$PROJECT_ROOT"
     # Logs are handled by Python's RotatingFileHandler in src/logging_config.py
     # Redirect stdout/stderr to /dev/null to avoid nohup.out
-    nohup celery -A src.celery_app.celery_app worker --loglevel=info > /dev/null 2>&1 &
+    nohup celery -A src.celery_app.celery_app worker -Q default,har,atomic,summary,archive --loglevel=info > /dev/null 2>&1 &
     echo $! > "$LOGS_DIR/celery_worker.pid"
     sleep 3
     echo -e "${GREEN}✓ Celery worker started${NC}"
