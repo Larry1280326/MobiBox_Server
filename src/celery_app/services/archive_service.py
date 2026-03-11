@@ -32,7 +32,6 @@ ARCHIVAL_LOGS_TABLE = "archival_logs"
 SUPABASE_MAX_LIMIT = 1000
 
 # Retry configuration
-MAX_RETRIES = 5
 BASE_DELAY = 2.0  # seconds
 MAX_DELAY = 60.0  # seconds
 BATCH_DELAY = 1.0  # delay between successful batches
@@ -47,29 +46,27 @@ def is_retryable_error(error: Exception) -> bool:
     return any(code in error_str for code in retryable_codes)
 
 
-async def retry_with_backoff(func, *args, max_retries: int = MAX_RETRIES, **kwargs):
-    """Execute a function with exponential backoff retry logic."""
-    last_error = None
+async def retry_with_backoff(func, *args, **kwargs):
+    """Execute a function with exponential backoff retry logic.
 
-    for attempt in range(max_retries):
+    Retries indefinitely until success for retryable errors.
+    Non-retryable errors are raised immediately.
+    """
+    attempt = 0
+
+    while True:
         try:
             return await func(*args, **kwargs)
         except Exception as e:
-            last_error = e
             if not is_retryable_error(e):
                 raise  # Non-retryable error, fail immediately
 
-            if attempt < max_retries - 1:
-                # Calculate delay with exponential backoff and jitter
-                delay = min(BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), MAX_DELAY)
-                logger.warning(f"Retryable error on attempt {attempt + 1}/{max_retries}: {e}")
-                logger.info(f"Waiting {delay:.1f} seconds before retry...")
-                await asyncio.sleep(delay)
-            else:
-                logger.error(f"Max retries ({max_retries}) exceeded")
-                raise
-
-    raise last_error
+            attempt += 1
+            # Calculate delay with exponential backoff and jitter, capped at MAX_DELAY
+            delay = min(BASE_DELAY * (2 ** min(attempt, 6)) + random.uniform(0, 1), MAX_DELAY)
+            logger.warning(f"Retryable error on attempt {attempt}: {e}")
+            logger.info(f"Waiting {delay:.1f} seconds before retry...")
+            await asyncio.sleep(delay)
 
 
 def _records_to_parquet(records: list[dict]) -> bytes:
