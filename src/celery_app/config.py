@@ -27,12 +27,14 @@ ATOMIC_DEBOUNCE_SECONDS = 5  # Minimum time between atomic processing per user
 # =============================================================================
 # TSFM Model Configuration (Time Series Foundation Model)
 # Zero-shot activity recognition with 87+ activity labels
+# DISABLED: Using lightweight HAR model instead
 # =============================================================================
-USE_TSFM_MODEL = True  # Set to False to use legacy IMU transformer
+USE_TSFM_MODEL = False  # Disabled - using lightweight HAR
 TSFM_MIN_SAMPLES = 10  # Minimum IMU samples required for TSFM inference
 
 # Legacy IMU HAR model (Transformer encoder); set to None to use mock
-HAR_IMU_MODEL_CHECKPOINT = "src/celery_app/services/imu_model_utils/ckpts/run_05_06_25_14_16_final_no_cycling_7_class8_25.pth"
+# DISABLED: Using lightweight HAR model instead
+HAR_IMU_MODEL_CHECKPOINT = None  # Disabled - using lightweight HAR
 
 # IMU Transformer config (must match trained checkpoint)
 HAR_IMU_MODEL_CONFIG = {
