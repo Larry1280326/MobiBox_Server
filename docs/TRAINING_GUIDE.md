@@ -2,29 +2,70 @@
 
 This guide explains how to train the TinierHAR model on a remote GPU machine.
 
+## Quick Start (Recommended)
+
+The fastest way to train - auto-downloads UCI-HAR public dataset:
+
+```bash
+# On remote GPU machine
+cd train_lightweight_har
+pip install -r requirements.txt
+python download_and_prepare.py --output checkpoints/
+```
+
+This automatically:
+1. Downloads UCI-HAR dataset (public benchmark)
+2. Converts to training format
+3. Trains TinierHAR model
+4. Saves checkpoint to `checkpoints/best.pt`
+
 ## Overview
 
-The training pipeline consists of three steps:
-1. **Export training data** from Supabase (local machine)
-2. **Transfer data** to remote GPU machine
-3. **Train model** on remote machine
-4. **Transfer checkpoint** back to repository
+Two options for training data:
 
-## Prerequisites
+| Option | Description | Best For |
+|--------|-------------|----------|
+| **Public Dataset** | UCI-HAR (auto-download) | Quick start, baseline model |
+| **Custom Data** | Export from Supabase | Your specific use case |
 
-### Local Machine
-- Python 3.10+
-- Access to Supabase database
-- Required packages: `supabase`, `numpy`
+## Option 1: Public Dataset (Recommended)
 
-### Remote GPU Machine
-- Python 3.10+
-- CUDA-capable GPU (recommended)
-- Required packages: `torch`, `numpy`, `scikit-learn`, `tqdm`
+### Datasets Available
 
-## Step 1: Export Training Data (Local)
+**UCI-HAR Dataset** (Recommended)
+- 10,299 samples, 30 subjects
+- 6 activities: Walking, Upstairs, Downstairs, Sitting, Standing, Laying
+- Accelerometer + Gyroscope at 50Hz
+- Auto-downloads from: https://archive.ics.uci.edu/dataset/240/human+activity+recognition+
 
-On your local machine, run the export script:
+**WISDM Dataset** (Alternative)
+- 1.1M samples
+- Accelerometer only
+- Download with: `python scripts/download_har_dataset.py --dataset wisdm`
+
+### Quick Commands
+
+```bash
+# Download and train (UCI-HAR)
+python download_and_prepare.py --output checkpoints/
+
+# Download only (skip training)
+python download_and_prepare.py --download-only --output data/
+
+# Train with custom parameters
+python download_and_prepare.py \
+    --output checkpoints/ \
+    --epochs 200 \
+    --batch-size 128 \
+    --lr 5e-4 \
+    --device cuda
+```
+
+## Option 2: Custom Data from Supabase
+
+If you have labeled IMU data in your database:
+
+### Export from Supabase
 
 ```bash
 # Activate virtual environment
@@ -38,8 +79,7 @@ python scripts/export_training_data.py \
     --output data/ \
     --min-samples-per-class 50 \
     --val-split 0.2 \
-    --days-back 30 \
-    --seed 42
+    --days-back 30
 ```
 
 **Output files:**
