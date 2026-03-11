@@ -118,13 +118,13 @@ class AttentionAggregation(nn.Module):
         super().__init__()
 
         # Learn attention weights per timestep
-        self.attention = nn.Linear(input_dim, 1)
+        self.attn = nn.Linear(input_dim, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (batch, time, features)
 
         # Compute attention scores: (batch, time, 1)
-        scores = self.attention(x)
+        scores = self.attn(x)
 
         # Softmax over time dimension: (batch, time, 1)
         weights = F.softmax(scores, dim=1)
