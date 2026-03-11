@@ -19,6 +19,9 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.bak
+*.dat 
+*.dir 
 
 # Virtual environments
 venv/
@@ -45,6 +48,8 @@ env/
 
 # Logs
 *.log
+*.log.*
+*.pt
 logs/
 
 # Testing
@@ -53,6 +58,7 @@ logs/
 htmlcov/
 .tox/
 .nox/
+har_results.csv
 
 # MyPy
 .mypy_cache/

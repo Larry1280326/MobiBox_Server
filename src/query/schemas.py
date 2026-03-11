@@ -1,0 +1,211 @@
+"""Pydantic schemas for query endpoints."""
+
+from datetime import datetime
+from typing import Optional, List
+
+from pydantic import BaseModel, Field
+
+
+# ============================================================================
+# Summary Log Schemas
+# ============================================================================
+
+
+class SummaryLogRequest(BaseModel):
+    """Request model for fetching summary logs."""
+
+    user: str = Field(..., min_length=1, description="User identifier")
+    log_type: str = Field(
+        ...,
+        pattern="^(hourly|daily)$",
+        description="Type of summary log (hourly or daily)",
+    )
+    last_log_id: Optional[int] = Field(
+        None,
+        description="ID of the last log received. If provided and no new log exists, returns None.",
+    )
+
+
+class SummaryLogItem(BaseModel):
+    """Single summary log item."""
+
+    id: int = Field(..., description="Database record ID")
+    log_content: str = Field(..., description="Summary log text content")
+    start_timestamp: Optional[datetime] = Field(None, description="Window start timestamp")
+    end_timestamp: Optional[datetime] = Field(None, description="Window end timestamp")
+    generation_timestamp: datetime = Field(..., description="Timestamp when the log was generated")
+
+
+class SummaryLogResponse(BaseModel):
+    """Response model for summary logs."""
+
+    status: str = "success"
+    data: Optional[SummaryLogItem] = Field(None, description="The most recent summary log")
+    has_new_log: bool = Field(
+        True,
+        description="True if there's a newer log than last_log_id, or if last_log_id wasn't provided",
+    )
+
+
+# ============================================================================
+# Intervention Schemas
+# ============================================================================
+
+
+class InterventionRequest(BaseModel):
+    """Request model for fetching interventions."""
+
+    user: str = Field(..., min_length=1, description="User identifier")
+
+
+class InterventionItem(BaseModel):
+    """Single intervention item."""
+
+    id: int = Field(..., description="Database record ID")
+    intervention_content: str = Field(..., description="Intervention text content")
+    start_timestamp: Optional[datetime] = Field(None, description="Window start timestamp")
+    end_timestamp: Optional[datetime] = Field(None, description="Window end timestamp")
+    generation_timestamp: datetime = Field(..., description="Timestamp when the intervention was generated")
+
+
+class InterventionResponse(BaseModel):
+    """Response model for interventions."""
+
+    status: str = "success"
+    data: Optional[InterventionItem] = Field(None, description="The most recent intervention")
+
+
+# ============================================================================
+# Intervention Feedback Schemas
+# ============================================================================
+
+
+class InterventionFeedbackRequest(BaseModel):
+    """Request model for submitting intervention feedback."""
+
+    user: str = Field(..., min_length=1, description="User identifier")
+    intervention_id: int = Field(..., description="ID of the intervention being rated")
+    mc1: Optional[str] = Field(None, description="Multiple choice response 1")
+    mc2: Optional[str] = Field(None, description="Multiple choice response 2")
+    mc3: Optional[str] = Field(None, description="Multiple choice response 3")
+    mc4: Optional[str] = Field(None, description="Multiple choice response 4")
+    mc5: Optional[str] = Field(None, description="Multiple choice response 5")
+    mc6: Optional[str] = Field(None, description="Multiple choice response 6")
+    feedback: str = Field(..., description="Feedback text")
+
+
+class InterventionFeedbackResponse(BaseModel):
+    """Response model for intervention feedback submission."""
+
+    status: str = "success"
+    message: str = "Feedback submitted successfully"
+
+
+# ============================================================================
+# Summary Log Feedback Schemas
+# ============================================================================
+
+
+class SummaryLogFeedbackRequest(BaseModel):
+    """Request model for submitting summary log feedback.
+
+    Supports both simple text feedback and structured feedback with Q1-Q2.
+    """
+
+    user: str = Field(..., min_length=1, description="User identifier")
+    summary_logs_id: int = Field(..., description="ID of the summary log being rated")
+    # Simple feedback (for basic use cases)
+    feedback: Optional[str] = Field(None, description="Simple feedback text")
+    # Structured feedback (for detailed feedback)
+    q1: Optional[str] = Field(None, description="Log quality/accuracy score (0-5)")
+    q2: Optional[str] = Field(None, description="Content preference match (yes/no)")
+    q2_preference: Optional[str] = Field(None, description="Comma-separated preference categories when Q2 is 'no'")
+    ground_truth: Optional[str] = Field(None, description="Standard answer provided by user")
+    suggestions: Optional[str] = Field(None, description="Optimization suggestions from user")
+
+
+class SummaryLogFeedbackResponse(BaseModel):
+    """Response model for summary log feedback submission."""
+
+    status: str = "success"
+    message: str = "Feedback submitted successfully"
+
+
+# ============================================================================
+# Atomic Activities Schemas
+# ============================================================================
+
+
+class AtomicActivitiesRequest(BaseModel):
+    """Request model for fetching compressed atomic activities."""
+
+    user: str = Field(..., min_length=1, description="User identifier")
+    duration: int = Field(
+        0,
+        ge=0,
+        description="Duration in seconds since last fetch (0 for all available data)",
+    )
+
+
+class AtomicActivitiesData(BaseModel):
+    """Compressed atomic activities data."""
+
+    sport: List[str] = Field(default_factory=list, description="HAR labels (sport activities)")
+    appCategory: List[str] = Field(default_factory=list, description="App category values")
+    location: List[str] = Field(default_factory=list, description="Location labels")
+    movement: List[str] = Field(default_factory=list, description="Movement labels")
+    stepCategory: List[str] = Field(default_factory=list, description="Step count categories")
+    phoneCategory: List[str] = Field(default_factory=list, description="Phone usage categories")
+
+
+class AtomicActivitiesResponse(BaseModel):
+    """Response model for compressed atomic activities."""
+
+    status: str = "success"
+    data: Optional[AtomicActivitiesData] = Field(None, description="Compressed atomic activities data")
+
+
+# ============================================================================
+# Encoded Atomic Activities Schemas
+# ============================================================================
+
+
+class WindowMeta(BaseModel):
+    """Window metadata for atomic activities encoding."""
+
+    duration_min: float = Field(..., description="Total duration in minutes")
+    token_minutes: float = Field(1.0, description="Token size in minutes")
+
+
+class Level2CompactView(BaseModel):
+    """Level-2 compact view with aggregated statistics."""
+
+    activity_top: List[List] = Field(default_factory=list, description="Top activities with duration")
+    place_top: List[List] = Field(default_factory=list, description="Top places with duration")
+    steps_distribution: List[List] = Field(default_factory=list, description="Steps distribution")
+    movement_distribution: List[List] = Field(default_factory=list, description="Movement distribution")
+    phone_distribution: List[List] = Field(default_factory=list, description="Phone usage distribution")
+    app_top: List[List] = Field(default_factory=list, description="Top apps with duration")
+
+
+class Level1TemporalView(BaseModel):
+    """Level-1 temporal view with timeline encoding."""
+
+    timeline_compact: List[str] = Field(default_factory=list, description="Compact timeline per dimension")
+    macro_timeline: List[str] = Field(default_factory=list, description="Human-readable timeline slots")
+    rle_exact_compact: dict = Field(default_factory=dict, description="Run-length encoding per dimension")
+
+
+class EncodedAtomicActivitiesData(BaseModel):
+    """Encoded atomic activities data with Level-1 and Level-2 views."""
+
+    window_meta: WindowMeta = Field(..., description="Window metadata")
+    level2_compact_view: Level2CompactView = Field(..., description="Level-2 aggregated statistics")
+    level1_temporal_view: Level1TemporalView = Field(..., description="Level-1 temporal encoding")
+
+
+class EncodedAtomicActivitiesResponse(BaseModel):
+    """Response model for encoded atomic activities."""
+
+    status: str = "success"
+    data: Optional[EncodedAtomicActivitiesData] = Field(None, description="Encoded atomic activities data")

@@ -37,6 +37,7 @@ dependencies:
     # Testing
     - pytest
     - pytest-asyncio
+    - pytest-mock
     - httpx  # For testing FastAPI
 
     # Utilities
@@ -44,8 +45,27 @@ dependencies:
     - pyyaml
     - orjson  # Fast JSON serialization
 
+    # LLM Integration
+    - langchain-openai
+    - langchain-core
+    - langchain-text-splitters
+
     # Development tools
     - black
     - isort
     - flake8
     - mypy
+
+    # Celery
+    - celery
+    - aio-pika
+
+    # HAR / IMU model (numpy required; torch for transformer when checkpoint set)
+    - numpy
+    - torch
+
+    # TSFM model dependencies
+    - sentence-transformers
+
+    # Data archival (Parquet format)
+    - pyarrow  # For efficient Parquet storage (~10-100x compression vs CSV)
