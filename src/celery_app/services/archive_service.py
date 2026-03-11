@@ -1,7 +1,9 @@
 """Service for archiving old data to Supabase Storage using Parquet format."""
 
+import asyncio
 import io
 import logging
+import random
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -28,6 +30,46 @@ ARCHIVAL_LOGS_TABLE = "archival_logs"
 
 # Supabase REST API has a maximum of 1000 records per request
 SUPABASE_MAX_LIMIT = 1000
+
+# Retry configuration
+MAX_RETRIES = 5
+BASE_DELAY = 2.0  # seconds
+MAX_DELAY = 60.0  # seconds
+BATCH_DELAY = 1.0  # delay between successful batches
+
+
+def is_retryable_error(error: Exception) -> bool:
+    """Check if an error is retryable (transient)."""
+    error_str = str(error).lower()
+    # 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout
+    # Connection errors, rate limiting
+    retryable_codes = ['502', '503', '504', '429', 'timeout', 'connection', 'rate']
+    return any(code in error_str for code in retryable_codes)
+
+
+async def retry_with_backoff(func, *args, max_retries: int = MAX_RETRIES, **kwargs):
+    """Execute a function with exponential backoff retry logic."""
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            if not is_retryable_error(e):
+                raise  # Non-retryable error, fail immediately
+
+            if attempt < max_retries - 1:
+                # Calculate delay with exponential backoff and jitter
+                delay = min(BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), MAX_DELAY)
+                logger.warning(f"Retryable error on attempt {attempt + 1}/{max_retries}: {e}")
+                logger.info(f"Waiting {delay:.1f} seconds before retry...")
+                await asyncio.sleep(delay)
+            else:
+                logger.error(f"Max retries ({max_retries}) exceeded")
+                raise
+
+    raise last_error
 
 
 def _records_to_parquet(records: list[dict]) -> bytes:
@@ -116,15 +158,15 @@ class ArchiveService:
         cutoff_date = datetime.now(CHINA_TZ) - timedelta(days=retention_days)
         cutoff_iso = cutoff_date.isoformat()
 
-        import asyncio
+        async def _count():
+            return await asyncio.to_thread(
+                lambda: self.client.table(table_name)
+                .select("id", count="exact")
+                .lt("timestamp", cutoff_iso)
+                .execute()
+            )
 
-        response = await asyncio.to_thread(
-            lambda: self.client.table(table_name)
-            .select("id", count="exact")
-            .lt("timestamp", cutoff_iso)
-            .execute()
-        )
-
+        response = await retry_with_backoff(_count)
         return getattr(response, 'count', 0) if response else 0
 
     async def fetch_records_batch(
@@ -150,17 +192,17 @@ class ArchiveService:
 
         select_columns = ", ".join(columns) if columns else "*"
 
-        import asyncio
+        async def _fetch():
+            return await asyncio.to_thread(
+                lambda: self.client.table(table_name)
+                .select(select_columns)
+                .lt("timestamp", cutoff_iso)
+                .order("timestamp", desc=False)
+                .limit(SUPABASE_MAX_LIMIT)
+                .execute()
+            )
 
-        response = await asyncio.to_thread(
-            lambda: self.client.table(table_name)
-            .select(select_columns)
-            .lt("timestamp", cutoff_iso)
-            .order("timestamp", desc=False)
-            .limit(SUPABASE_MAX_LIMIT)
-            .execute()
-        )
-
+        response = await retry_with_backoff(_fetch)
         return response.data if response.data else []
 
     async def upload_to_storage(
@@ -181,17 +223,16 @@ class ArchiveService:
         Returns:
             True if upload successful
         """
-        import asyncio
-
         try:
-            response = await asyncio.to_thread(
-                lambda: self.client.storage.from_(bucket).upload(
-                    path=path,
-                    file=content,
-                    file_options={"content-type": content_type},
+            async def _upload():
+                return await asyncio.to_thread(
+                    lambda: self.client.storage.from_(bucket).upload(
+                        path=path,
+                        file=content,
+                        file_options={"content-type": content_type},
+                    )
                 )
-            )
-
+            await retry_with_backoff(_upload)
             logger.info(f"Uploaded archive to {bucket}/{path}")
             return True
 
@@ -200,13 +241,15 @@ class ArchiveService:
             # Handle case where file already exists (update instead)
             if "already exists" in error_str or "duplicate" in error_str:
                 try:
-                    await asyncio.to_thread(
-                        lambda: self.client.storage.from_(bucket).update(
-                            path=path,
-                            file=content,
-                            file_options={"content-type": content_type},
+                    async def _update():
+                        return await asyncio.to_thread(
+                            lambda: self.client.storage.from_(bucket).update(
+                                path=path,
+                                file=content,
+                                file_options={"content-type": content_type},
+                            )
                         )
-                    )
+                    await retry_with_backoff(_update)
                     logger.info(f"Updated archive at {bucket}/{path}")
                     return True
                 except Exception as update_error:
@@ -235,16 +278,15 @@ class ArchiveService:
         if not record_ids:
             return 0
 
-        import asyncio
-
         try:
-            await asyncio.to_thread(
-                lambda: self.client.table(table_name)
-                .delete()
-                .in_(id_column, record_ids)
-                .execute()
-            )
-
+            async def _delete():
+                return await asyncio.to_thread(
+                    lambda: self.client.table(table_name)
+                    .delete()
+                    .in_(id_column, record_ids)
+                    .execute()
+                )
+            await retry_with_backoff(_delete)
             logger.info(f"Deleted {len(record_ids)} records from {table_name}")
             return len(record_ids)
 
@@ -273,22 +315,22 @@ class ArchiveService:
             status: Status of archival (completed, failed, partial)
             error_message: Error message if failed
         """
-        import asyncio
-
         try:
-            await asyncio.to_thread(
-                lambda: self.client.table(ARCHIVAL_LOGS_TABLE)
-                .insert({
-                    "table_name": table_name,
-                    "records_archived": records_archived,
-                    "records_deleted": records_deleted,
-                    "storage_path": storage_paths[0] if storage_paths else None,
-                    "file_size_bytes": total_size_bytes,
-                    "status": status,
-                    "error_message": error_message,
-                })
-                .execute()
-            )
+            async def _log():
+                return await asyncio.to_thread(
+                    lambda: self.client.table(ARCHIVAL_LOGS_TABLE)
+                    .insert({
+                        "table_name": table_name,
+                        "records_archived": records_archived,
+                        "records_deleted": records_deleted,
+                        "storage_path": storage_paths[0] if storage_paths else None,
+                        "file_size_bytes": total_size_bytes,
+                        "status": status,
+                        "error_message": error_message,
+                    })
+                    .execute()
+                )
+            await retry_with_backoff(_log)
             logger.debug(f"Logged archival operation for {table_name}")
         except Exception as e:
             logger.error(f"Failed to log archival operation: {e}")
@@ -316,8 +358,6 @@ class ArchiveService:
         Returns:
             Dictionary with archival statistics
         """
-        import asyncio
-
         if not self.settings.archive_enabled:
             logger.info(f"Archival disabled, skipping {table_name}")
             return {"table": table_name, "archived": 0, "deleted": 0, "skipped": True}
@@ -451,8 +491,8 @@ class ArchiveService:
                 logger.info(f"Last batch processed for {table_name}")
                 break
 
-            # Small delay between batches to avoid rate limiting
-            await asyncio.sleep(0.1)
+            # Delay between batches to avoid rate limiting
+            await asyncio.sleep(BATCH_DELAY)
 
         # Log final archival operation
         await self.log_archival_operation(
