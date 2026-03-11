@@ -4,15 +4,15 @@
 
 Replace/augment the current TSFM model (~21M params) with a lightweight HAR model (~93K params) for efficient edge deployment while maintaining compatible 7-class output.
 
-## Status
+## Status: Complete ✅
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 1 | ✅ Complete | Model architecture implementation |
-| Phase 2 | 📋 Pending | Data preparation pipeline |
-| Phase 3 | 📋 Pending | Training pipeline and experiments |
+| Phase 2 | ✅ Complete | Data preparation pipeline |
+| Phase 3 | ✅ Complete | Training pipeline and experiments |
 | Phase 4 | ✅ Complete | Integration with existing HAR service |
-| Phase 5 | 📋 Pending | Optimization and deployment prep |
+| Phase 5 | 📋 Pending | Optimization and deployment prep (INT8 quantization) |
 
 ## Current State
 

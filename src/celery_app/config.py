@@ -53,7 +53,7 @@ HAR_IMU_MODEL_CONFIG = {
 # Ultra-lightweight model (~34K params) for edge deployment
 # =============================================================================
 USE_LIGHTWEIGHT_HAR = True  # Enable lightweight HAR in fallback chain
-LIGHTWEIGHT_HAR_CHECKPOINT = None  # Path to checkpoint (None for random weights)
+LIGHTWEIGHT_HAR_CHECKPOINT = "src/celery_app/services/lightweight_har/ckpts/best.pt"  # Path to checkpoint
 LIGHTWEIGHT_HAR_MIN_SAMPLES = 10  # Minimum IMU samples required
 
 # TinierHAR config (must match trained checkpoint if using pretrained weights)
