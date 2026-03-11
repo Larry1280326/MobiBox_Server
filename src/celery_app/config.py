@@ -48,6 +48,33 @@ HAR_IMU_MODEL_CONFIG = {
     "encode_position": True,
 }
 
+# =============================================================================
+# Lightweight HAR Model Configuration (TinierHAR)
+# Ultra-lightweight model (~34K params) for edge deployment
+# =============================================================================
+USE_LIGHTWEIGHT_HAR = True  # Enable lightweight HAR in fallback chain
+LIGHTWEIGHT_HAR_CHECKPOINT = None  # Path to checkpoint (None for random weights)
+LIGHTWEIGHT_HAR_MIN_SAMPLES = 10  # Minimum IMU samples required
+
+# TinierHAR config (must match trained checkpoint if using pretrained weights)
+LIGHTWEIGHT_HAR_CONFIG = {
+    "input_channels": 9,  # acc_X/Y/Z, gyro_X/Y/Z, mag_X/Y/Z
+    "window_size": 50,    # 1 second at 50Hz
+    "stage1_channels": 64,
+    "stage1_kernel": 5,
+    "stage1_pool": 4,
+    "stage2_channels": 128,
+    "stage2_kernel": 3,
+    "stage2_pool": 2,
+    "gru_hidden": 64,
+    "gru_layers": 1,
+    "gru_dropout": 0.1,
+    "attention_dim": 128,
+    "hidden_dim": 64,
+    "num_classes": 7,
+    "dropout": 0.1,
+}
+
 # Beat schedule
 CELERY_BEAT_SCHEDULE = {
     "har-periodic": {

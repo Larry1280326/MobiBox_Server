@@ -27,6 +27,9 @@ from src.celery_app.config import (
     HAR_IMU_MODEL_CONFIG,
     USE_TSFM_MODEL,
     TSFM_MIN_SAMPLES,
+    USE_LIGHTWEIGHT_HAR,
+    LIGHTWEIGHT_HAR_CHECKPOINT,
+    LIGHTWEIGHT_HAR_MIN_SAMPLES,
 )
 from src.celery_app.services.processing_state_service import (
     get_last_processed,
@@ -198,17 +201,56 @@ def _run_imu_model_sync(imu_tensor: np.ndarray) -> tuple[int, float]:
     return pred_idx, confidence
 
 
+# Cached lightweight HAR model (lazy-loaded)
+_lightweight_har_model = None
+_lightweight_har_available = None
+
+
+def _get_lightweight_har_model():
+    """Load and cache lightweight HAR model; returns (model, available)."""
+    global _lightweight_har_model, _lightweight_har_available
+    if _lightweight_har_available is not None:
+        return _lightweight_har_model, _lightweight_har_available
+    try:
+        from .lightweight_har.inference import get_lightweight_har_model
+        model, available = get_lightweight_har_model(
+            checkpoint_path=LIGHTWEIGHT_HAR_CHECKPOINT,
+            device="cpu",
+        )
+        _lightweight_har_model = model
+        _lightweight_har_available = available
+        if available:
+            logger.info(f"Lightweight HAR model loaded: {model.count_parameters():,} parameters")
+        return _lightweight_har_model, _lightweight_har_available
+    except Exception as e:
+        logger.warning(f"Failed to load lightweight HAR model: {e}")
+        _lightweight_har_available = False
+        return None, False
+
+
+def _run_lightweight_har_sync(imu_data: list[dict]) -> tuple[str, float]:
+    """Run lightweight HAR model in sync context; returns (label, confidence)."""
+    from .lightweight_har.inference import run_lightweight_har_inference
+    label, confidence, source = run_lightweight_har_inference(
+        imu_data,
+        checkpoint_path=LIGHTWEIGHT_HAR_CHECKPOINT,
+        device="cpu",
+    )
+    return label, confidence
+
+
 async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
     """
     Run HAR model on IMU data.
 
     Priority:
     1. TSFM model (if USE_TSFM_MODEL=True and checkpoint available)
-    2. Legacy IMU transformer (if checkpoint configured)
-    3. Mock model (fallback)
+    2. Lightweight HAR model (if USE_LIGHTWEIGHT_HAR=True)
+    3. Legacy IMU transformer (if checkpoint configured)
+    4. Mock model (fallback)
 
     Returns:
-        Tuple of (label, confidence, source) where source is "tsfm_model", "imu_model", or "mock_har".
+        Tuple of (label, confidence, source) where source is "tsfm_model", "lightweight_har", "imu_model", or "mock_har".
     """
     # Check minimum samples
     if len(imu_data) < 1:
@@ -231,13 +273,34 @@ async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
                 logger.info(f"TSFM result: label={label}, confidence={confidence}")
                 return label, confidence, source
             elif not tsfm_available:
-                logger.warning("TSFM model not available, falling back to legacy model")
+                logger.warning("TSFM model not available, falling back to lightweight model")
             elif len(imu_data) < TSFM_MIN_SAMPLES:
                 logger.warning(f"Not enough samples for TSFM: {len(imu_data)} < {TSFM_MIN_SAMPLES}, falling back")
         except Exception as e:
-            logger.warning(f"TSFM model failed, falling back to legacy: {e}", exc_info=True)
+            logger.warning(f"TSFM model failed, falling back to lightweight: {e}", exc_info=True)
     else:
         logger.debug("TSFM model disabled (USE_TSFM_MODEL=False)")
+
+    # Try lightweight HAR model (if enabled)
+    if USE_LIGHTWEIGHT_HAR:
+        try:
+            model, available = _get_lightweight_har_model()
+            if available and model is not None:
+                if len(imu_data) >= LIGHTWEIGHT_HAR_MIN_SAMPLES:
+                    logger.info(f"Running lightweight HAR inference with {len(imu_data)} samples")
+                    label, confidence = await asyncio.to_thread(
+                        _run_lightweight_har_sync, imu_data
+                    )
+                    logger.info(f"Lightweight HAR result: label={label}, confidence={confidence}")
+                    return label, round(confidence, 2), "lightweight_har"
+                else:
+                    logger.warning(f"Not enough samples for lightweight HAR: {len(imu_data)} < {LIGHTWEIGHT_HAR_MIN_SAMPLES}")
+            else:
+                logger.warning("Lightweight HAR model not available, falling back to legacy model")
+        except Exception as e:
+            logger.warning(f"Lightweight HAR model failed, falling back to legacy: {e}", exc_info=True)
+    else:
+        logger.debug("Lightweight HAR model disabled (USE_LIGHTWEIGHT_HAR=False)")
 
     # Fall back to legacy IMU transformer
     model, available = _get_imu_model()
