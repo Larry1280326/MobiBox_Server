@@ -28,7 +28,7 @@ ATOMIC_DEBOUNCE_SECONDS = 5  # Minimum time between atomic processing per user
 # TSFM Model Configuration (Time Series Foundation Model)
 # Zero-shot activity recognition with 87+ activity labels
 # =============================================================================
-USE_TSFM_MODEL = True  # Set to False to use legacy IMU transformer
+USE_TSFM_MODEL = False  # Set to False to use legacy IMU transformer
 TSFM_MIN_SAMPLES = 10  # Minimum IMU samples required for TSFM inference
 
 # Legacy IMU HAR model (Transformer encoder); set to None to use mock
