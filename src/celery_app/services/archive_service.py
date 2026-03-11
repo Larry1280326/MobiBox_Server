@@ -26,6 +26,9 @@ INTERVENTION_FEEDBACKS_TABLE = "intervention_feedbacks"
 SUMMARY_LOG_FEEDBACKS_TABLE = "summary_log_feedbacks"
 ARCHIVAL_LOGS_TABLE = "archival_logs"
 
+# Supabase REST API has a maximum of 1000 records per request
+SUPABASE_MAX_LIMIT = 1000
+
 
 def _records_to_parquet(records: list[dict]) -> bytes:
     """Convert records to compressed Parquet format.
@@ -74,38 +77,73 @@ class ArchiveService:
         self.client = client or get_supabase_admin_client()
         self.settings = get_settings()
 
-    def _get_storage_path(self, table_name: str, date: datetime) -> str:
+    def _get_storage_path(self, table_name: str, date: datetime, batch_num: int = 0) -> str:
         """Generate storage path for archived data.
 
         Args:
             table_name: Name of the table being archived
             date: Date for the archive file
+            batch_num: Batch number (0 for single file, >0 for batched files)
 
         Returns:
             Storage path in format: archives/{table_name}/{year}/{month}/{filename}.parquet
         """
         year = date.strftime("%Y")
         month = date.strftime("%m")
-        filename = f"{date.strftime('%Y-%m-%d')}.parquet"
+        day = date.strftime("%Y-%m-%d")
+
+        if batch_num > 0:
+            filename = f"{day}_batch{batch_num:04d}.parquet"
+        else:
+            filename = f"{day}.parquet"
+
         return f"archives/{table_name}/{year}/{month}/{filename}"
 
-    async def fetch_records_for_archival(
+    async def count_records_for_archival(
         self,
         table_name: str,
         retention_days: int,
-        batch_size: int,
-        columns: Optional[list[str]] = None,
-    ) -> list[dict]:
-        """Fetch records older than retention period.
+    ) -> int:
+        """Count records older than retention period.
 
         Args:
             table_name: Name of the table
             retention_days: Number of days to keep data
-            batch_size: Maximum number of records to fetch
+
+        Returns:
+            Number of records to archive
+        """
+        cutoff_date = datetime.now(CHINA_TZ) - timedelta(days=retention_days)
+        cutoff_iso = cutoff_date.isoformat()
+
+        import asyncio
+
+        response = await asyncio.to_thread(
+            lambda: self.client.table(table_name)
+            .select("id", count="exact")
+            .lt("timestamp", cutoff_iso)
+            .execute()
+        )
+
+        return getattr(response, 'count', 0) if response else 0
+
+    async def fetch_records_batch(
+        self,
+        table_name: str,
+        retention_days: int,
+        columns: Optional[list[str]] = None,
+    ) -> list[dict]:
+        """Fetch a single batch of records older than retention period.
+
+        Note: Supabase REST API has a maximum limit of 1000 records per request.
+
+        Args:
+            table_name: Name of the table
+            retention_days: Number of days to keep data
             columns: Optional list of columns to select (default: all)
 
         Returns:
-            List of records to archive
+            List of records to archive (max 1000)
         """
         cutoff_date = datetime.now(CHINA_TZ) - timedelta(days=retention_days)
         cutoff_iso = cutoff_date.isoformat()
@@ -119,7 +157,7 @@ class ArchiveService:
             .select(select_columns)
             .lt("timestamp", cutoff_iso)
             .order("timestamp", desc=False)
-            .limit(batch_size)
+            .limit(SUPABASE_MAX_LIMIT)
             .execute()
         )
 
@@ -219,8 +257,8 @@ class ArchiveService:
         table_name: str,
         records_archived: int,
         records_deleted: int,
-        storage_path: Optional[str],
-        file_size_bytes: Optional[int],
+        storage_paths: list[str],
+        total_size_bytes: int,
         status: str,
         error_message: Optional[str] = None,
     ) -> None:
@@ -230,8 +268,8 @@ class ArchiveService:
             table_name: Name of the table archived
             records_archived: Number of records archived
             records_deleted: Number of records deleted
-            storage_path: Path to the archive file
-            file_size_bytes: Size of the archive file in bytes
+            storage_paths: List of storage paths (one per batch)
+            total_size_bytes: Total size of all archive files in bytes
             status: Status of archival (completed, failed, partial)
             error_message: Error message if failed
         """
@@ -244,8 +282,8 @@ class ArchiveService:
                     "table_name": table_name,
                     "records_archived": records_archived,
                     "records_deleted": records_deleted,
-                    "storage_path": storage_path,
-                    "file_size_bytes": file_size_bytes,
+                    "storage_path": storage_paths[0] if storage_paths else None,
+                    "file_size_bytes": total_size_bytes,
                     "status": status,
                     "error_message": error_message,
                 })
@@ -259,137 +297,181 @@ class ArchiveService:
         self,
         table_name: str,
         retention_days: int,
-        batch_size: int,
+        batch_size: int = 10000,  # Unused, kept for API compatibility
         columns: Optional[list[str]] = None,
         id_column: str = "id",
     ) -> dict:
         """Archive old records from a table to storage and delete them.
 
+        This method processes records in batches of 1000 (Supabase's max limit)
+        and archives all records older than the retention period.
+
         Args:
             table_name: Name of the table
             retention_days: Number of days to keep data
-            batch_size: Maximum records per batch
+            batch_size: Unused (kept for API compatibility)
             columns: Columns to archive (default: all)
             id_column: Name of the ID column
 
         Returns:
             Dictionary with archival statistics
         """
+        import asyncio
+
         if not self.settings.archive_enabled:
             logger.info(f"Archival disabled, skipping {table_name}")
             return {"table": table_name, "archived": 0, "deleted": 0, "skipped": True}
 
         logger.info(f"Starting archival for {table_name} (retention: {retention_days} days)")
 
-        # Fetch records to archive
-        records = await self.fetch_records_for_archival(
+        # Count total records to archive
+        total_count = await self.count_records_for_archival(
             table_name=table_name,
             retention_days=retention_days,
-            batch_size=batch_size,
-            columns=columns,
         )
 
-        if not records:
+        logger.info(f"Records to archive for {table_name}: {total_count}")
+
+        if total_count == 0:
             logger.info(f"No records to archive for {table_name}")
-            # Log that no records needed archiving
             await self.log_archival_operation(
                 table_name=table_name,
                 records_archived=0,
                 records_deleted=0,
-                storage_path=None,
-                file_size_bytes=None,
+                storage_paths=[],
+                total_size_bytes=0,
                 status="completed",
             )
             return {"table": table_name, "archived": 0, "deleted": 0}
 
-        # Convert to Parquet format
-        try:
-            parquet_bytes = _records_to_parquet(records)
-            file_size = len(parquet_bytes)
-            logger.info(
-                f"Converted {len(records)} records to Parquet ({file_size} bytes) "
-                f"for {table_name}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to convert records to Parquet: {e}")
-            await self.log_archival_operation(
+        # Track totals across all batches
+        total_archived = 0
+        total_deleted = 0
+        total_size = 0
+        storage_paths = []
+        batch_num = 0
+
+        # Process in batches until all records are archived
+        while True:
+            batch_num += 1
+
+            # Fetch one batch
+            records = await self.fetch_records_batch(
                 table_name=table_name,
-                records_archived=len(records),
-                records_deleted=0,
-                storage_path=None,
-                file_size_bytes=None,
-                status="failed",
-                error_message=f"Parquet conversion failed: {str(e)}",
+                retention_days=retention_days,
+                columns=columns,
             )
-            return {
-                "table": table_name,
-                "archived": 0,
-                "deleted": 0,
-                "error": "parquet_conversion_failed",
-            }
 
-        # Generate storage path
-        oldest_record = records[0]
-        if "timestamp" in oldest_record:
-            record_date = datetime.fromisoformat(
-                oldest_record["timestamp"].replace("Z", "+00:00")
+            if not records:
+                logger.info(f"No more records to process for {table_name}")
+                break
+
+            logger.info(f"Processing batch {batch_num} for {table_name}: {len(records)} records")
+
+            # Convert to Parquet
+            try:
+                parquet_bytes = _records_to_parquet(records)
+                file_size = len(parquet_bytes)
+            except Exception as e:
+                logger.error(f"Failed to convert batch {batch_num} to Parquet: {e}")
+                await self.log_archival_operation(
+                    table_name=table_name,
+                    records_archived=total_archived,
+                    records_deleted=total_deleted,
+                    storage_paths=storage_paths,
+                    total_size_bytes=total_size,
+                    status="partial" if total_archived > 0 else "failed",
+                    error_message=f"Parquet conversion failed at batch {batch_num}: {str(e)}",
+                )
+                return {
+                    "table": table_name,
+                    "archived": total_archived,
+                    "deleted": total_deleted,
+                    "storage_paths": storage_paths,
+                    "error": "parquet_conversion_failed",
+                }
+
+            # Generate storage path with batch number
+            oldest_record = records[0]
+            if "timestamp" in oldest_record and oldest_record["timestamp"]:
+                ts_str = oldest_record["timestamp"]
+                if ts_str.endswith("Z"):
+                    ts_str = ts_str[:-1] + "+00:00"
+                record_date = datetime.fromisoformat(ts_str)
+            else:
+                record_date = datetime.now(CHINA_TZ)
+
+            storage_path = self._get_storage_path(table_name, record_date, batch_num)
+
+            # Upload to storage
+            upload_success = await self.upload_to_storage(
+                bucket=self.settings.storage_bucket,
+                path=storage_path,
+                content=parquet_bytes,
+                content_type="application/vnd.apache.parquet",
             )
-        else:
-            record_date = datetime.now(CHINA_TZ)
 
-        storage_path = self._get_storage_path(table_name, record_date)
+            if not upload_success:
+                logger.error(f"Failed to upload batch {batch_num} for {table_name}")
+                await self.log_archival_operation(
+                    table_name=table_name,
+                    records_archived=total_archived,
+                    records_deleted=total_deleted,
+                    storage_paths=storage_paths,
+                    total_size_bytes=total_size,
+                    status="partial" if total_archived > 0 else "failed",
+                    error_message=f"Upload failed at batch {batch_num}",
+                )
+                return {
+                    "table": table_name,
+                    "archived": total_archived,
+                    "deleted": total_deleted,
+                    "storage_paths": storage_paths,
+                    "error": "upload_failed",
+                }
 
-        # Upload to storage
-        upload_success = await self.upload_to_storage(
-            bucket=self.settings.storage_bucket,
-            path=storage_path,
-            content=parquet_bytes,
-            content_type="application/vnd.apache.parquet",
-        )
+            storage_paths.append(storage_path)
+            total_size += file_size
 
-        if not upload_success:
-            error_msg = "Failed to upload archive file"
-            logger.error(f"Failed to upload archive for {table_name}, not deleting records")
-            await self.log_archival_operation(
-                table_name=table_name,
-                records_archived=len(records),
-                records_deleted=0,
-                storage_path=storage_path,
-                file_size_bytes=file_size,
-                status="failed",
-                error_message=error_msg,
-            )
-            return {
-                "table": table_name,
-                "archived": 0,
-                "deleted": 0,
-                "error": "upload_failed",
-            }
+            # Delete archived records
+            record_ids = [r[id_column] for r in records if id_column in r]
+            if record_ids:
+                deleted = await self.delete_archived_records(
+                    table_name=table_name,
+                    record_ids=record_ids,
+                    id_column=id_column,
+                )
+                total_deleted += deleted
 
-        # Delete archived records
-        record_ids = [r[id_column] for r in records if id_column in r]
-        deleted_count = await self.delete_archived_records(
-            table_name=table_name,
-            record_ids=record_ids,
-            id_column=id_column,
-        )
+            total_archived += len(records)
+            logger.info(f"Progress for {table_name}: {total_archived}/{total_count} records archived")
 
-        # Log successful archival
+            # Check if we got fewer records than max (last batch)
+            if len(records) < SUPABASE_MAX_LIMIT:
+                logger.info(f"Last batch processed for {table_name}")
+                break
+
+            # Small delay between batches to avoid rate limiting
+            await asyncio.sleep(0.1)
+
+        # Log final archival operation
         await self.log_archival_operation(
             table_name=table_name,
-            records_archived=len(records),
-            records_deleted=deleted_count,
-            storage_path=storage_path,
-            file_size_bytes=file_size,
+            records_archived=total_archived,
+            records_deleted=total_deleted,
+            storage_paths=storage_paths,
+            total_size_bytes=total_size,
             status="completed",
         )
 
+        logger.info(f"Archival complete for {table_name}: {total_archived} records archived, {total_deleted} deleted")
+
         return {
             "table": table_name,
-            "archived": len(records),
-            "deleted": deleted_count,
-            "storage_path": storage_path,
-            "file_size_bytes": file_size,
+            "archived": total_archived,
+            "deleted": total_deleted,
+            "storage_paths": storage_paths,
+            "total_size_bytes": total_size,
         }
 
     async def archive_all_tables(self) -> dict:
@@ -399,48 +481,41 @@ class ArchiveService:
             Dictionary with archival statistics for all tables
         """
         results = {}
-        batch_size = self.settings.archive_batch_size
 
         # Archive IMU data (highest volume, shortest retention)
         results["imu"] = await self.archive_table(
             table_name=IMU_TABLE,
             retention_days=self.settings.retention_imu_days,
-            batch_size=batch_size,
         )
 
         # Archive HAR labels
         results["har"] = await self.archive_table(
             table_name=HAR_TABLE,
             retention_days=self.settings.retention_har_days,
-            batch_size=batch_size,
         )
 
         # Archive atomic activities
         results["atomic_activities"] = await self.archive_table(
             table_name=ATOMIC_ACTIVITIES_TABLE,
             retention_days=self.settings.retention_atomic_days,
-            batch_size=batch_size,
         )
 
         # Archive uploads
         results["uploads"] = await self.archive_table(
             table_name=UPLOADS_TABLE,
             retention_days=self.settings.retention_uploads_days,
-            batch_size=batch_size,
         )
 
         # Archive summary logs (longer retention)
         results["summary_logs"] = await self.archive_table(
             table_name=SUMMARY_LOGS_TABLE,
             retention_days=self.settings.retention_summary_logs_days,
-            batch_size=batch_size,
         )
 
         # Archive interventions
         results["interventions"] = await self.archive_table(
             table_name=INTERVENTIONS_TABLE,
             retention_days=self.settings.retention_interventions_days,
-            batch_size=batch_size,
         )
 
         return results
