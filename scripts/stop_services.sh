@@ -69,10 +69,16 @@ else
 fi
 
 # =========================================
-# Clean up PID files
+# Clean up PID files and beat schedule cache
 # =========================================
 echo -e "${YELLOW}Cleaning up PID files...${NC}"
 rm -f "$LOGS_DIR"/*.pid 2>/dev/null || true
+
+# Clear celery beat schedule cache to pick up new tasks
+echo -e "${YELLOW}Clearing celery beat schedule cache...${NC}"
+rm -f "$PROJECT_ROOT/celerybeat-schedule"* 2>/dev/null || true
+rm -f "$PROJECT_ROOT/celerybeat-schedule.db" 2>/dev/null || true
+echo -e "${GREEN}✓ Schedule cache cleared (will reload tasks on next start)${NC}"
 
 # =========================================
 # Summary

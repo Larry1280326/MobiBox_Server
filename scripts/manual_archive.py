@@ -1,18 +1,27 @@
-"""Manual archival script for imu and uploads tables.
+#!/usr/bin/env python3
+"""Manual archival script for all tables.
 
 Usage:
-    cd /Users/larry/Desktop/MobiBox/MobiBox_Server
+    cd /path/to/MobiBox_Server
     python -m scripts.manual_archive
 
-Or run directly:
+    # Or run directly:
     python scripts/manual_archive.py
+
+    # Archive specific table:
+    python -m scripts.manual_archive --table imu
+
+    # Archive before specific date:
+    python -m scripts.manual_archive --before 2026-03-01
 """
 
+import argparse
 import asyncio
 import io
 import logging
 import random
-from datetime import datetime
+import sys
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pyarrow as pa
@@ -29,11 +38,20 @@ logger = logging.getLogger(__name__)
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
-# Retry configuration
-MAX_RETRIES = 5
+# Retry configuration (matching archive_service.py)
 BASE_DELAY = 2.0  # seconds
 MAX_DELAY = 60.0  # seconds
 BATCH_DELAY = 1.0  # delay between successful batches
+
+# Table names
+TABLES = {
+    "imu": "IMU data",
+    "uploads": "Upload metadata",
+    "har": "HAR labels",
+    "atomic_activities": "Atomic activities",
+    "summary_logs": "Summary logs",
+    "interventions": "Interventions",
+}
 
 
 def is_retryable_error(error: Exception) -> bool:
@@ -45,33 +63,44 @@ def is_retryable_error(error: Exception) -> bool:
     return any(code in error_str for code in retryable_codes)
 
 
-async def retry_with_backoff(func, *args, max_retries: int = MAX_RETRIES, **kwargs):
-    """Execute a function with exponential backoff retry logic."""
-    last_error = None
+async def retry_with_backoff(func, *args, **kwargs):
+    """Execute a function with exponential backoff retry logic.
 
-    for attempt in range(max_retries):
+    Retries indefinitely for retryable errors.
+    Non-retryable errors are raised immediately.
+    """
+    attempt = 0
+
+    while True:
         try:
             return await func(*args, **kwargs)
         except Exception as e:
-            last_error = e
             if not is_retryable_error(e):
                 raise  # Non-retryable error, fail immediately
 
-            if attempt < max_retries - 1:
-                # Calculate delay with exponential backoff and jitter
-                delay = min(BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), MAX_DELAY)
-                logger.warning(f"Retryable error on attempt {attempt + 1}/{max_retries}: {e}")
-                logger.info(f"Waiting {delay:.1f} seconds before retry...")
-                await asyncio.sleep(delay)
-            else:
-                logger.error(f"Max retries ({max_retries}) exceeded")
-                raise
-
-    raise last_error
+            attempt += 1
+            # Calculate delay with exponential backoff and jitter, capped at MAX_DELAY
+            delay = min(BASE_DELAY * (2 ** min(attempt, 6)) + random.uniform(0, 1), MAX_DELAY)
+            logger.warning(f"Retryable error on attempt {attempt}: {e}")
+            logger.info(f"Waiting {delay:.1f} seconds before retry...")
+            await asyncio.sleep(delay)
 
 
-async def fetch_batch(client, table_name: str, cutoff_iso: str, batch_size: int):
-    """Fetch a batch of records with retry logic."""
+async def count_records(client, table_name: str, cutoff_iso: str) -> int:
+    """Count records older than cutoff."""
+    async def _count():
+        return await asyncio.to_thread(
+            lambda: client.table(table_name)
+            .select("id", count="exact")
+            .lt("timestamp", cutoff_iso)
+            .execute()
+        )
+    response = await retry_with_backoff(_count)
+    return getattr(response, 'count', 0) if response else 0
+
+
+async def fetch_batch(client, table_name: str, cutoff_iso: str, batch_size: int = 1000) -> list:
+    """Fetch a batch of records older than cutoff."""
     async def _fetch():
         return await asyncio.to_thread(
             lambda: client.table(table_name)
@@ -81,23 +110,53 @@ async def fetch_batch(client, table_name: str, cutoff_iso: str, batch_size: int)
             .limit(batch_size)
             .execute()
         )
-    return await retry_with_backoff(_fetch)
+    response = await retry_with_backoff(_fetch)
+    return response.data if response.data else []
 
 
-async def count_records(client, table_name: str, cutoff_iso: str):
-    """Count records with retry logic."""
-    async def _count():
-        return await asyncio.to_thread(
-            lambda: client.table(table_name)
-            .select("id", count="exact")
-            .lt("timestamp", cutoff_iso)
-            .execute()
-        )
-    return await retry_with_backoff(_count)
+async def upload_to_storage(client, bucket: str, path: str, content: bytes, content_type: str) -> bool:
+    """Upload content to Supabase Storage."""
+    try:
+        async def _upload():
+            return await asyncio.to_thread(
+                lambda: client.storage.from_(bucket).upload(
+                    path=path,
+                    file=content,
+                    file_options={"content-type": content_type},
+                )
+            )
+        await retry_with_backoff(_upload)
+        logger.info(f"Uploaded archive to {bucket}/{path}")
+        return True
+
+    except Exception as e:
+        error_str = str(e).lower()
+        if "already exists" in error_str or "duplicate" in error_str:
+            try:
+                async def _update():
+                    return await asyncio.to_thread(
+                        lambda: client.storage.from_(bucket).update(
+                            path=path,
+                            file=content,
+                            file_options={"content-type": content_type},
+                        )
+                    )
+                await retry_with_backoff(_update)
+                logger.info(f"Updated archive at {bucket}/{path}")
+                return True
+            except Exception as update_error:
+                logger.error(f"Failed to update archive {path}: {update_error}")
+                return False
+        else:
+            logger.error(f"Failed to upload archive {path}: {e}")
+            return False
 
 
-async def delete_records(client, table_name: str, record_ids: list):
-    """Delete records with retry logic."""
+async def delete_records(client, table_name: str, record_ids: list) -> int:
+    """Delete archived records from database."""
+    if not record_ids:
+        return 0
+
     async def _delete():
         return await asyncio.to_thread(
             lambda: client.table(table_name)
@@ -105,113 +164,129 @@ async def delete_records(client, table_name: str, record_ids: list):
             .in_("id", record_ids)
             .execute()
         )
-    return await retry_with_backoff(_delete)
+    await retry_with_backoff(_delete)
+    logger.info(f"Deleted {len(record_ids)} records from {table_name}")
+    return len(record_ids)
 
 
-async def upload_to_storage(client, bucket: str, path: str, content: bytes, content_type: str):
-    """Upload to storage with retry logic."""
-    async def _upload():
+async def log_archival(client, table_name: str, archived: int, deleted: int,
+                       storage_paths: list, total_size: int, status: str, error: str = None):
+    """Log archival operation to database."""
+    async def _log():
         return await asyncio.to_thread(
-            lambda: client.storage.from_(bucket).upload(
-                path=path,
-                file=content,
-                file_options={"content-type": content_type},
-            )
+            lambda: client.table("archival_logs").insert({
+                "table_name": table_name,
+                "records_archived": archived,
+                "records_deleted": deleted,
+                "storage_path": storage_paths[0] if storage_paths else None,
+                "file_size_bytes": total_size,
+                "status": status,
+                "error_message": error,
+            }).execute()
         )
-    return await retry_with_backoff(_upload)
+    await retry_with_backoff(_log)
 
 
-async def update_storage(client, bucket: str, path: str, content: bytes, content_type: str):
-    """Update storage file with retry logic."""
-    async def _update():
-        return await asyncio.to_thread(
-            lambda: client.storage.from_(bucket).update(
-                path=path,
-                file=content,
-                file_options={"content-type": content_type},
-            )
-        )
-    return await retry_with_backoff(_update)
+def get_storage_path(table_name: str, record_date: datetime, batch_num: int = 0) -> str:
+    """Generate storage path for archived data."""
+    year = record_date.strftime("%Y")
+    month = record_date.strftime("%m")
+    day = record_date.strftime("%Y-%m-%d")
+
+    if batch_num > 0:
+        filename = f"{day}_batch{batch_num:04d}.parquet"
+    else:
+        filename = f"{day}.parquet"
+
+    return f"archives/{table_name}/{year}/{month}/{filename}"
 
 
-async def archive_table(table_name: str, before_date: datetime | None = None):
-    """Archive records before specified date (default: today).
+def records_to_parquet(records: list) -> bytes:
+    """Convert records to compressed Parquet format."""
+    if not records:
+        return b""
 
-    This function processes records in batches, handling Supabase's 1000 record limit
-    per request. It archives all records before the cutoff date in a loop.
+    table = pa.Table.from_pylist(records)
+    buffer = io.BytesIO()
+    pq.write_table(
+        table,
+        buffer,
+        compression="snappy",
+        use_dictionary=True,
+        write_statistics=True,
+    )
+    return buffer.getvalue()
+
+
+async def archive_table(client, bucket: str, table_name: str, retention_days: int,
+                        before_date: datetime = None) -> dict:
+    """Archive old records from a table to storage and delete them.
 
     Args:
-        table_name: Name of the table ('imu' or 'uploads')
-        before_date: Archive records before this date (default: start of today)
+        client: Supabase admin client
+        bucket: Storage bucket name
+        table_name: Name of the table
+        retention_days: Number of days to keep data
+        before_date: Archive records before this date (default: calculated from retention)
 
     Returns:
-        Dict with archival statistics
+        Dictionary with archival statistics
     """
-    settings = get_settings()
-    client = get_supabase_admin_client()
-
-    # Default: archive everything before today
+    # Calculate cutoff date
     if before_date is None:
-        before_date = datetime.now(CHINA_TZ).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        cutoff_date = datetime.now(CHINA_TZ) - timedelta(days=retention_days)
+    else:
+        cutoff_date = before_date
 
-    cutoff_iso = before_date.isoformat()
+    cutoff_iso = cutoff_date.isoformat()
 
     logger.info(f"{'='*60}")
-    logger.info(f"Archiving table: {table_name}")
+    logger.info(f"Archiving table: {table_name} ({TABLES.get(table_name, 'Unknown')})")
+    logger.info(f"Retention: {retention_days} days")
     logger.info(f"Cutoff timestamp: {cutoff_iso}")
     logger.info(f"{'='*60}")
 
-    # Step 1: Count records with retry
-    count_response = await count_records(client, table_name, cutoff_iso)
-
-    total_count = getattr(count_response, 'count', 0)
+    # Count total records to archive
+    total_count = await count_records(client, table_name, cutoff_iso)
     logger.info(f"Records to archive: {total_count}")
 
     if total_count == 0:
-        logger.info("No records to archive.")
+        logger.info(f"No records to archive for {table_name}")
+        await log_archival(client, table_name, 0, 0, [], 0, "completed")
         return {"table": table_name, "archived": 0, "deleted": 0}
 
-    # Track totals across all batches
+    # Track totals
     total_archived = 0
     total_deleted = 0
     total_size = 0
     storage_paths = []
-
-    # Step 2: Process in batches (Supabase max limit is 1000)
-    batch_size = 1000
     batch_num = 0
 
+    # Process in batches
     while True:
         batch_num += 1
-        logger.info(f"\n--- Processing batch {batch_num} ---")
 
-        # Fetch one batch with retry logic
-        response = await fetch_batch(client, table_name, cutoff_iso, batch_size)
-
-        if not response.data:
-            logger.info("No more records to process.")
+        # Fetch batch
+        records = await fetch_batch(client, table_name, cutoff_iso)
+        if not records:
+            logger.info(f"No more records to process for {table_name}")
             break
 
-        batch_records = response.data
-        logger.info(f"Fetched {len(batch_records)} records in batch {batch_num}")
+        logger.info(f"Processing batch {batch_num}: {len(records)} records")
 
-        # Step 3: Convert to Parquet
-        table = pa.Table.from_pylist(batch_records)
-        buffer = io.BytesIO()
-        pq.write_table(
-            table,
-            buffer,
-            compression="snappy",
-            use_dictionary=True,
-            write_statistics=True,
-        )
-        parquet_bytes = buffer.getvalue()
-        file_size = len(parquet_bytes)
+        # Convert to Parquet
+        try:
+            parquet_bytes = records_to_parquet(records)
+            file_size = len(parquet_bytes)
+        except Exception as e:
+            logger.error(f"Failed to convert batch {batch_num} to Parquet: {e}")
+            await log_archival(client, table_name, total_archived, total_deleted,
+                             storage_paths, total_size, "partial" if total_archived > 0 else "failed",
+                             f"Parquet conversion failed: {e}")
+            return {"table": table_name, "archived": total_archived, "deleted": total_deleted, "error": str(e)}
 
-        # Step 4: Generate storage path with batch number
-        oldest_record = batch_records[0]
+        # Generate storage path
+        oldest_record = records[0]
         if "timestamp" in oldest_record and oldest_record["timestamp"]:
             ts_str = oldest_record["timestamp"]
             if ts_str.endswith("Z"):
@@ -220,71 +295,47 @@ async def archive_table(table_name: str, before_date: datetime | None = None):
         else:
             record_date = datetime.now(CHINA_TZ)
 
-        year = record_date.strftime("%Y")
-        month = record_date.strftime("%m")
-        day = record_date.strftime("%Y-%m-%d")
-        # Add batch number to filename to avoid overwriting
-        storage_path = f"archives/{table_name}/{year}/{month}/{day}_batch{batch_num:04d}.parquet"
+        storage_path = get_storage_path(table_name, record_date, batch_num)
 
-        logger.info(f"Storage path: {storage_path}")
-        logger.info(f"Parquet size: {file_size:,} bytes ({file_size/1024:.2f} KB)")
+        # Upload to storage
+        upload_success = await upload_to_storage(
+            client, bucket, storage_path, parquet_bytes,
+            "application/vnd.apache.parquet"
+        )
 
-        # Step 5: Upload to Supabase Storage with retry
-        bucket = settings.storage_bucket
-
-        try:
-            await upload_to_storage(
-                client, bucket, storage_path, parquet_bytes,
-                "application/vnd.apache.parquet"
-            )
-            logger.info(f"✅ Uploaded to {bucket}/{storage_path}")
-        except Exception as e:
-            error_str = str(e).lower()
-            if "already exists" in error_str or "duplicate" in error_str:
-                await update_storage(
-                    client, bucket, storage_path, parquet_bytes,
-                    "application/vnd.apache.parquet"
-                )
-                logger.info(f"✅ Updated {bucket}/{storage_path}")
-            else:
-                raise
+        if not upload_success:
+            logger.error(f"Failed to upload batch {batch_num} for {table_name}")
+            await log_archival(client, table_name, total_archived, total_deleted,
+                             storage_paths, total_size, "partial" if total_archived > 0 else "failed",
+                             f"Upload failed at batch {batch_num}")
+            return {"table": table_name, "archived": total_archived, "deleted": total_deleted,
+                    "storage_paths": storage_paths, "error": "upload_failed"}
 
         storage_paths.append(storage_path)
         total_size += file_size
 
-        # Step 6: Delete archived records with retry
-        record_ids = [r["id"] for r in batch_records if "id" in r]
-
+        # Delete archived records
+        record_ids = [r["id"] for r in records if "id" in r]
         if record_ids:
-            await delete_records(client, table_name, record_ids)
-            total_deleted += len(record_ids)
-            logger.info(f"✅ Deleted {len(record_ids)} records from {table_name}")
+            deleted = await delete_records(client, table_name, record_ids)
+            total_deleted += deleted
 
-        total_archived += len(batch_records)
+        total_archived += len(records)
         logger.info(f"Progress: {total_archived}/{total_count} records archived")
 
-        # Check if we got fewer records than requested (last batch)
-        if len(batch_records) < batch_size:
-            logger.info("Last batch processed.")
+        # Check if last batch
+        if len(records) < 1000:
+            logger.info(f"Last batch processed for {table_name}")
             break
 
-        # Delay between batches to avoid rate limiting
+        # Delay between batches
         await asyncio.sleep(BATCH_DELAY)
 
-    # Step 7: Log to archival_logs table with retry
-    async def _log():
-        return await asyncio.to_thread(
-            lambda: client.table("archival_logs").insert({
-                "table_name": table_name,
-                "records_archived": total_archived,
-                "records_deleted": total_deleted,
-                "storage_path": storage_paths[0] if storage_paths else None,
-                "file_size_bytes": total_size,
-                "status": "completed",
-            }).execute()
-        )
-    await retry_with_backoff(_log)
-    logger.info(f"✅ Logged archival operation")
+    # Log final operation
+    await log_archival(client, table_name, total_archived, total_deleted,
+                      storage_paths, total_size, "completed")
+
+    logger.info(f"Archival complete for {table_name}: {total_archived} archived, {total_deleted} deleted")
 
     return {
         "table": table_name,
@@ -295,45 +346,124 @@ async def archive_table(table_name: str, before_date: datetime | None = None):
     }
 
 
-async def main():
-    """Run archival for imu and uploads tables."""
+async def main(tables: list = None, before_date: datetime = None):
+    """Run archival for specified tables (or all tables).
+
+    Args:
+        tables: List of table names to archive (default: all)
+        before_date: Archive records before this date (default: use retention settings)
+    """
+    settings = get_settings()
+    client = get_supabase_admin_client()
+
+    # Check if archival is enabled
+    if not settings.archive_enabled:
+        logger.warning("Archival is disabled in settings (archive_enabled=False)")
+        logger.warning("Set archive_enabled=True in .env to enable archival")
+        return
+
     print(f"\n{'='*60}")
     print("MANUAL DATA ARCHIVAL")
     print(f"{'='*60}")
-    print(f"Started at: {datetime.now(CHINA_TZ).isoformat()}\n")
+    print(f"Started at: {datetime.now(CHINA_TZ).isoformat()}")
+    print(f"Archive enabled: {settings.archive_enabled}")
+    print(f"{'='*60}\n")
+
+    # Define tables with their retention settings
+    all_tables = [
+        ("imu", settings.retention_imu_days, TABLES["imu"]),
+        ("uploads", settings.retention_uploads_days, TABLES["uploads"]),
+        ("har", settings.retention_har_days, TABLES["har"]),
+        ("atomic_activities", settings.retention_atomic_days, TABLES["atomic_activities"]),
+        ("summary_logs", settings.retention_summary_logs_days, TABLES["summary_logs"]),
+        ("interventions", settings.retention_interventions_days, TABLES["interventions"]),
+    ]
+
+    # Filter to specified tables if provided
+    if tables:
+        all_tables = [(t, r, n) for t, r, n in all_tables if t in tables]
+        if not all_tables:
+            print(f"Error: No valid tables found. Valid tables: {list(TABLES.keys())}")
+            return
 
     results = {}
 
-    # Archive IMU table
-    try:
-        results["imu"] = await archive_table("imu")
-    except Exception as e:
-        logger.error(f"Failed to archive imu: {e}")
-        results["imu"] = {"error": str(e)}
-
-    # Archive uploads table
-    try:
-        results["uploads"] = await archive_table("uploads")
-    except Exception as e:
-        logger.error(f"Failed to archive uploads: {e}")
-        results["uploads"] = {"error": str(e)}
+    for table_name, retention_days, _ in all_tables:
+        try:
+            results[table_name] = await archive_table(
+                client=client,
+                bucket=settings.storage_bucket,
+                table_name=table_name,
+                retention_days=retention_days,
+                before_date=before_date,
+            )
+        except Exception as e:
+            logger.error(f"Failed to archive {table_name}: {e}")
+            results[table_name] = {"error": str(e)}
 
     # Summary
     print(f"\n{'='*60}")
     print("ARCHIVAL SUMMARY")
     print(f"{'='*60}")
 
-    for table, result in results.items():
+    for table_name, result in results.items():
         if "error" in result:
-            print(f"{table}: ❌ Error - {result['error']}")
+            print(f"{table_name}: ❌ Error - {result['error']}")
         else:
-            print(f"{table}: ✅ {result.get('archived', 0)} records archived, "
+            print(f"{table_name}: ✅ {result.get('archived', 0)} records archived, "
                   f"{result.get('deleted', 0)} deleted")
-            if result.get("storage_path"):
-                print(f"         Storage: {result['storage_path']}")
+            if result.get("storage_paths"):
+                for path in result["storage_paths"][:3]:
+                    print(f"         Storage: {path}")
+                if len(result["storage_paths"]) > 3:
+                    print(f"         ... and {len(result['storage_paths']) - 3} more files")
 
     print(f"\nCompleted at: {datetime.now(CHINA_TZ).isoformat()}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(
+        description="Manually archive old data to Supabase Storage",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Archive all tables using retention settings
+    python -m scripts.manual_archive
+
+    # Archive specific table
+    python -m scripts.manual_archive --table imu
+
+    # Archive before specific date
+    python -m scripts.manual_archive --before 2026-03-01
+
+    # Archive specific table before date
+    python -m scripts.manual_archive --table har --before 2026-03-01
+        """
+    )
+    parser.add_argument(
+        "--table", "-t",
+        help="Specific table to archive (default: all tables)",
+        choices=list(TABLES.keys()),
+    )
+    parser.add_argument(
+        "--before", "-b",
+        help="Archive records before this date (YYYY-MM-DD)",
+        type=lambda s: datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=CHINA_TZ),
+    )
+    parser.add_argument(
+        "--list-tables", "-l",
+        action="store_true",
+        help="List available tables and exit",
+    )
+
+    args = parser.parse_args()
+
+    if args.list_tables:
+        print("\nAvailable tables:")
+        for name, desc in TABLES.items():
+            print(f"  {name}: {desc}")
+        sys.exit(0)
+
+    tables = [args.table] if args.table else None
+
+    asyncio.run(main(tables=tables, before_date=args.before))
