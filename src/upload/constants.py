@@ -1,8 +1,8 @@
 """Constants for upload module."""
 
-# Supabase table names
-UPLOADS_TABLE = "uploads"
-IMU_TABLE = "imu"
+# MongoDB collection names
+UPLOADS_COLLECTION = "uploads"
+IMU_COLLECTION = "imu"
 
 # Optional fields for document uploads (excludes required 'user' field)
 DOCUMENTS_OPTIONAL_FIELDS = [

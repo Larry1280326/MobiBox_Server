@@ -77,8 +77,8 @@ def archive_table_manual(table_name: str, retention_days: int) -> dict:
 
     async def run_manual_archival():
         service = ArchiveService()
-        return await service.archive_table(
-            table_name=table_name,
+        return await service.archive_collection(
+            collection_name=table_name,
             retention_days=retention_days,
             batch_size=service.settings.archive_batch_size,
         )
@@ -95,11 +95,10 @@ def get_archive_stats() -> dict:
     """
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
-    from src.database import get_supabase_client
+    from src.database import get_database
     from src.config import get_settings
 
     settings = get_settings()
-    client = get_supabase_client()
     china_tz = ZoneInfo("Asia/Shanghai")
 
     stats = {}
@@ -114,21 +113,16 @@ def get_archive_stats() -> dict:
     ]
 
     async def count_records():
+        db = await get_database()
         for table_name, retention_days in tables:
             cutoff_date = datetime.now(china_tz) - timedelta(days=retention_days)
-            cutoff_iso = cutoff_date.isoformat()
 
             try:
-                # Use count with head=True for efficiency
-                import asyncio
-                response = await asyncio.to_thread(
-                    lambda: client.table(table_name)
-                    .select("id", count="exact")
-                    .lt("timestamp", cutoff_iso)
-                    .execute()
+                count = await db[table_name].count_documents(
+                    {"timestamp": {"$lt": cutoff_date}}
                 )
                 stats[table_name] = {
-                    "archiveable_count": response.count if hasattr(response, 'count') else len(response.data),
+                    "archiveable_count": count,
                     "retention_days": retention_days,
                 }
             except Exception as e:

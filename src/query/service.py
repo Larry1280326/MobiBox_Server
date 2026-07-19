@@ -1,33 +1,38 @@
 """Business logic for querying summary logs, interventions, and atomic activities."""
 
-import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from supabase import Client
+from bson import ObjectId
 
-from src.database import get_supabase_client
+from src.database import get_database
 from src.query.constants import (
-    SUMMARY_LOGS_TABLE,
-    INTERVENTIONS_TABLE,
-    INTERVENTION_FEEDBACKS_TABLE,
-    SUMMARY_LOG_FEEDBACKS_TABLE,
-    ATOMIC_ACTIVITIES_TABLE,
+    SUMMARY_LOGS_COLLECTION,
+    INTERVENTIONS_COLLECTION,
+    INTERVENTION_FEEDBACKS_COLLECTION,
+    SUMMARY_LOG_FEEDBACKS_COLLECTION,
+    ATOMIC_ACTIVITIES_COLLECTION,
 )
 from src.query.atomic_encoding import encode_atomic_activities
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
+def _serialize_doc(doc: dict) -> dict:
+    """Convert MongoDB ObjectId to string for JSON serialization."""
+    if doc and "_id" in doc:
+        doc["id"] = str(doc["_id"])
+    return doc
+
+
 async def get_summary_logs(
     user: str,
     log_type: str,
-    last_log_id: Optional[int] = None,
-    client: Client | None = None,
+    last_log_id: Optional[str] = None,
 ) -> tuple[Optional[dict], bool]:
     """
-    Fetch the most recent summary log for a user from the database.
+    Fetch the most recent summary log for a user.
 
     Supports polling mechanism: if last_log_id is provided, returns None
     if the latest log ID matches (meaning no new log since last check).
@@ -35,83 +40,55 @@ async def get_summary_logs(
     Args:
         user: User identifier
         log_type: Type of summary log (hourly or daily)
-        last_log_id: Optional ID of the last received log. If provided,
-                     returns (None, False) if no new log is available.
-        client: Optional Supabase client
+        last_log_id: Optional ID (hex string) of the last received log.
 
     Returns:
         Tuple of (log record or None, has_new_log boolean)
     """
-    if client is None:
-        client = get_supabase_client()
+    db = await get_database()
 
-    # Get the most recent log
-    response = await asyncio.to_thread(
-        lambda: client.table(SUMMARY_LOGS_TABLE)
-        .select("*")
-        .eq("user", user)
-        .eq("log_type", log_type)
-        .order("timestamp", desc=True)
-        .limit(1)
-        .execute()
+    doc = await db[SUMMARY_LOGS_COLLECTION].find_one(
+        {"user": user, "log_type": log_type},
+        sort=[("timestamp", -1)],
     )
 
-    if not response.data:
+    if not doc:
         return None, False
 
-    latest_log = response.data[0]
-    latest_id = latest_log.get("id")
+    latest_id = str(doc["_id"])
 
     # If last_log_id provided, check if there's a newer log
     if last_log_id is not None:
         if latest_id == last_log_id:
-            # No new log
             return None, False
-        # There's a newer log
-        return latest_log, True
+        return _serialize_doc(doc), True
 
-    # No last_log_id provided, return latest
-    return latest_log, True
+    return _serialize_doc(doc), True
 
 
-async def get_interventions(
-    user: str,
-    client: Client | None = None,
-) -> Optional[dict]:
+async def get_interventions(user: str) -> Optional[dict]:
     """
-    Fetch the most recent intervention for a user from the database.
+    Fetch the most recent intervention for a user.
 
     Args:
         user: User identifier
-        client: Optional Supabase client
 
     Returns:
         The most recent intervention record, or None if not found
     """
-    if client is None:
-        client = get_supabase_client()
+    db = await get_database()
 
-    response = await asyncio.to_thread(
-        lambda: client.table(INTERVENTIONS_TABLE)
-        .select("*")
-        .eq("user", user)
-        .order("timestamp", desc=True)
-        .limit(1)
-        .execute()
+    doc = await db[INTERVENTIONS_COLLECTION].find_one(
+        {"user": user},
+        sort=[("timestamp", -1)],
     )
 
-    return response.data[0] if response.data else None
+    return _serialize_doc(doc) if doc else None
 
 
 def format_summary_log(record: dict) -> dict:
     """
     Format a summary log record for API response.
-
-    Args:
-        record: Raw database record
-
-    Returns:
-        Formatted record with expected field names
     """
     return {
         "id": record.get("id"),
@@ -125,12 +102,6 @@ def format_summary_log(record: dict) -> dict:
 def format_intervention(record: dict) -> dict:
     """
     Format an intervention record for API response.
-
-    Args:
-        record: Raw database record
-
-    Returns:
-        Formatted record with expected field names
     """
     return {
         "id": record.get("id"),
@@ -143,7 +114,7 @@ def format_intervention(record: dict) -> dict:
 
 async def submit_intervention_feedback(
     user: str,
-    intervention_id: int,
+    intervention_id: str,
     feedback: str,
     mc1: Optional[str] = None,
     mc2: Optional[str] = None,
@@ -151,23 +122,11 @@ async def submit_intervention_feedback(
     mc4: Optional[str] = None,
     mc5: Optional[str] = None,
     mc6: Optional[str] = None,
-    client: Client | None = None,
 ) -> dict:
     """
     Submit intervention feedback to the database.
-
-    Args:
-        user: User identifier
-        intervention_id: ID of the intervention being rated
-        feedback: Feedback text
-        mc1-mc6: Optional multiple choice responses
-        client: Optional Supabase client
-
-    Returns:
-        The inserted record
     """
-    if client is None:
-        client = get_supabase_client()
+    db = await get_database()
 
     data = {
         "user": user,
@@ -179,47 +138,28 @@ async def submit_intervention_feedback(
         "mc4": mc4,
         "mc5": mc5,
         "mc6": mc6,
+        "timestamp": datetime.now(CHINA_TZ),
     }
 
-    response = await asyncio.to_thread(
-        lambda: client.table(INTERVENTION_FEEDBACKS_TABLE)
-        .insert(data)
-        .execute()
-    )
-
-    return response.data[0] if response.data else {}
+    result = await db[INTERVENTION_FEEDBACKS_COLLECTION].insert_one(data)
+    data["_id"] = result.inserted_id
+    return _serialize_doc(data)
 
 
 async def submit_summary_log_feedback(
     user: str,
-    summary_logs_id: int,
+    summary_logs_id: str,
     feedback: Optional[str] = None,
     q1: Optional[str] = None,
     q2: Optional[str] = None,
     q2_preference: Optional[str] = None,
     ground_truth: Optional[str] = None,
     suggestions: Optional[str] = None,
-    client: Client | None = None,
 ) -> dict:
     """
     Submit summary log feedback to the database.
-
-    Args:
-        user: User identifier (string)
-        summary_logs_id: ID of the summary log being rated
-        feedback: Simple feedback text (for basic use cases)
-        q1: Log quality/accuracy score (0-5)
-        q2: Content preference match (yes/no)
-        q2_preference: Comma-separated preference categories when Q2 is 'no'
-        ground_truth: Standard answer provided by user
-        suggestions: Optimization suggestions from user
-        client: Optional Supabase client
-
-    Returns:
-        The inserted record
     """
-    if client is None:
-        client = get_supabase_client()
+    db = await get_database()
 
     data = {
         "user": user,
@@ -230,15 +170,12 @@ async def submit_summary_log_feedback(
         "q2_preference": q2_preference,
         "ground_truth": ground_truth,
         "suggestions": suggestions,
+        "timestamp": datetime.now(CHINA_TZ),
     }
 
-    response = await asyncio.to_thread(
-        lambda: client.table(SUMMARY_LOG_FEEDBACKS_TABLE)
-        .insert(data)
-        .execute()
-    )
-
-    return response.data[0] if response.data else {}
+    result = await db[SUMMARY_LOG_FEEDBACKS_COLLECTION].insert_one(data)
+    data["_id"] = result.inserted_id
+    return _serialize_doc(data)
 
 
 # ============================================================================
@@ -249,7 +186,6 @@ async def submit_summary_log_feedback(
 async def get_atomic_activities(
     user: str,
     duration: int,
-    client: Client | None = None,
 ) -> dict:
     """
     Fetch atomic activities for a user within a duration.
@@ -257,28 +193,23 @@ async def get_atomic_activities(
     Args:
         user: User identifier
         duration: Duration in seconds since last fetch (0 for all)
-        client: Optional Supabase client
 
     Returns:
         Dictionary with grouped atomic activity values
     """
-    if client is None:
-        client = get_supabase_client()
+    db = await get_database()
 
-    # Build query
-    query = client.table(ATOMIC_ACTIVITIES_TABLE).select("*").eq("user", user)
+    query = {"user": user}
 
     # Apply time filter if duration > 0
     if duration > 0:
         cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=duration)
-        query = query.gte("timestamp", cutoff_time.isoformat())
+        query["timestamp"] = {"$gte": cutoff_time}
 
-    # Order by timestamp ascending
-    query = query.order("timestamp", desc=False)
+    cursor = db[ATOMIC_ACTIVITIES_COLLECTION].find(query).sort("timestamp", 1)
+    docs = await cursor.to_list(None)
 
-    response = await asyncio.to_thread(lambda: query.execute())
-
-    if not response.data:
+    if not docs:
         return {
             "sport": [],
             "appCategory": [],
@@ -286,7 +217,13 @@ async def get_atomic_activities(
             "movement": [],
             "stepCategory": [],
             "phoneCategory": [],
+            "start_timestamp": None,
+            "end_timestamp": None,
         }
+
+    # Extract timestamp range from the queried documents
+    start_timestamp = docs[0].get("timestamp") if docs else None
+    end_timestamp = docs[-1].get("timestamp") if docs else None
 
     # Group data by field names
     sport_labels = []
@@ -296,8 +233,7 @@ async def get_atomic_activities(
     step_labels = []
     phone_usages = []
 
-    for record in response.data:
-        # Map database columns to frontend field names
+    for record in docs:
         if record.get("har_label"):
             sport_labels.append(record["har_label"])
         if record.get("app_category"):
@@ -318,45 +254,30 @@ async def get_atomic_activities(
         "movement": movements,
         "stepCategory": step_labels,
         "phoneCategory": phone_usages,
+        "start_timestamp": start_timestamp.isoformat() if start_timestamp else None,
+        "end_timestamp": end_timestamp.isoformat() if end_timestamp else None,
     }
 
 
 async def get_atomic_activities_encoded(
     user: str,
     duration: int,
-    client: Client | None = None,
 ) -> dict:
     """
     Fetch atomic activities for a user and encode them into Level-1 and Level-2 formats.
-
-    Args:
-        user: User identifier
-        duration: Duration in seconds since last fetch (0 for all)
-        client: Optional Supabase client
-
-    Returns:
-        Dictionary with encoded atomic activity data including:
-        - window_meta: Duration and token minutes
-        - level2_compact_view: Aggregated statistics
-        - level1_temporal_view: Timeline and RLE encoding
     """
-    if client is None:
-        client = get_supabase_client()
+    db = await get_database()
 
-    # Build query
-    query = client.table(ATOMIC_ACTIVITIES_TABLE).select("*").eq("user", user)
+    query = {"user": user}
 
-    # Apply time filter if duration > 0
     if duration > 0:
         cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=duration)
-        query = query.gte("timestamp", cutoff_time.isoformat())
+        query["timestamp"] = {"$gte": cutoff_time}
 
-    # Order by timestamp ascending
-    query = query.order("timestamp", desc=False)
+    cursor = db[ATOMIC_ACTIVITIES_COLLECTION].find(query).sort("timestamp", 1)
+    docs = await cursor.to_list(None)
 
-    response = await asyncio.to_thread(lambda: query.execute())
-
-    if not response.data:
+    if not docs:
         return encode_atomic_activities([])
 
-    return encode_atomic_activities(response.data)
+    return encode_atomic_activities(docs)

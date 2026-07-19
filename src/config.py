@@ -17,10 +17,9 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
     debug: bool = False
 
-    # Supabase
-    supabase_url: str
-    supabase_anon_key: str
-    supabase_service_role_key: str = ""  # Optional, for admin operations
+    # MongoDB
+    mongodb_url: str = "mongodb://localhost:27017"
+    mongodb_db_name: str = "mobibox"
 
     # RabbitMQ / Celery
     rabbitmq_url: str = "amqp://guest:guest@localhost:5672//"
@@ -32,7 +31,7 @@ class Settings(BaseSettings):
     baidu_maps_enabled: bool = False
 
     # Storage Configuration
-    storage_bucket: str = "mobibox-archive"  # Supabase storage bucket name
+    storage_bucket: str = "mobibox-archive"  # Local archive directory name
 
     # Data Retention Configuration (in days)
     retention_imu_days: int = 7  # IMU data retention
@@ -45,6 +44,7 @@ class Settings(BaseSettings):
     # Archival Configuration
     archive_enabled: bool = True  # Enable/disable archival
     archive_batch_size: int = 10000  # Records per batch
+    archive_dir: str = "./archives"  # Local directory for archived Parquet files
 
 
 class LLMSettings(BaseSettings):

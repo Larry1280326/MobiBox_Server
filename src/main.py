@@ -1,15 +1,38 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import get_settings
-from src.database import get_supabase_client
+from src.database import check_connection, close_database, get_database
+from src.database_indexes import ensure_indexes
 from src.logging_config import setup_api_logging
 from src.register import router as register_router
 from src.upload import router as upload_router
 from src.query import router as query_router
 from src.imu_test import router as imu_test_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown events."""
+    # Startup: create indexes and verify MongoDB connection
+    try:
+        db = await get_database()
+        await ensure_indexes(db)
+        logging.info("MobiBox API started — MongoDB indexes ensured")
+    except Exception as e:
+        logging.warning(f"MongoDB not available during startup: {e}. "
+                       "Endpoints requiring DB access will fail until MongoDB is running.")
+    yield
+    # Shutdown: close MongoDB connection
+    try:
+        await close_database()
+    except Exception:
+        pass
+    logging.info("MobiBox API shut down")
+
 
 # Configure rotational logging
 setup_api_logging()
@@ -20,6 +43,7 @@ app = FastAPI(
     title=settings.app_name,
     description="Backend API for MobiBox application",
     version=settings.app_version,
+    lifespan=lifespan,
 )
 
 # CORS middleware configuration
@@ -44,15 +68,10 @@ def health_check():
     return {"status": "healthy"}
 
 
-@app.get("/supabase-test")
-def test_supabase_connection():
-    """Test Supabase connection."""
-    try:
-        client = get_supabase_client()
-        # Simple health check - try to access the client
-        return {"status": "connected", "url": settings.supabase_url}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+@app.get("/mongodb-test")
+async def test_mongodb_connection():
+    """Test MongoDB connection."""
+    return await check_connection()
 
 
 if __name__ == "__main__":

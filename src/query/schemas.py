@@ -20,16 +20,16 @@ class SummaryLogRequest(BaseModel):
         pattern="^(hourly|daily)$",
         description="Type of summary log (hourly or daily)",
     )
-    last_log_id: Optional[int] = Field(
+    last_log_id: Optional[str] = Field(
         None,
-        description="ID of the last log received. If provided and no new log exists, returns None.",
+        description="ID of the last log received (MongoDB ObjectId hex string). If provided and no new log exists, returns None.",
     )
 
 
 class SummaryLogItem(BaseModel):
     """Single summary log item."""
 
-    id: int = Field(..., description="Database record ID")
+    id: str = Field(..., description="MongoDB ObjectId as hex string")
     log_content: str = Field(..., description="Summary log text content")
     start_timestamp: Optional[datetime] = Field(None, description="Window start timestamp")
     end_timestamp: Optional[datetime] = Field(None, description="Window end timestamp")
@@ -44,6 +44,10 @@ class SummaryLogResponse(BaseModel):
     has_new_log: bool = Field(
         True,
         description="True if there's a newer log than last_log_id, or if last_log_id wasn't provided",
+    )
+    date: Optional[str] = Field(
+        None,
+        description="Date string (YYYY-MM-DD) for daily logs, null for hourly logs",
     )
 
 
@@ -61,7 +65,7 @@ class InterventionRequest(BaseModel):
 class InterventionItem(BaseModel):
     """Single intervention item."""
 
-    id: int = Field(..., description="Database record ID")
+    id: str = Field(..., description="MongoDB ObjectId as hex string")
     intervention_content: str = Field(..., description="Intervention text content")
     start_timestamp: Optional[datetime] = Field(None, description="Window start timestamp")
     end_timestamp: Optional[datetime] = Field(None, description="Window end timestamp")
@@ -84,7 +88,7 @@ class InterventionFeedbackRequest(BaseModel):
     """Request model for submitting intervention feedback."""
 
     user: str = Field(..., min_length=1, description="User identifier")
-    intervention_id: int = Field(..., description="ID of the intervention being rated")
+    intervention_id: str = Field(..., description="MongoDB ObjectId of the intervention being rated")
     mc1: Optional[str] = Field(None, description="Multiple choice response 1")
     mc2: Optional[str] = Field(None, description="Multiple choice response 2")
     mc3: Optional[str] = Field(None, description="Multiple choice response 3")
@@ -113,7 +117,7 @@ class SummaryLogFeedbackRequest(BaseModel):
     """
 
     user: str = Field(..., min_length=1, description="User identifier")
-    summary_logs_id: int = Field(..., description="ID of the summary log being rated")
+    summary_logs_id: str = Field(..., description="MongoDB ObjectId of the summary log being rated")
     # Simple feedback (for basic use cases)
     feedback: Optional[str] = Field(None, description="Simple feedback text")
     # Structured feedback (for detailed feedback)
@@ -163,6 +167,8 @@ class AtomicActivitiesResponse(BaseModel):
 
     status: str = "success"
     data: Optional[AtomicActivitiesData] = Field(None, description="Compressed atomic activities data")
+    start_timestamp: Optional[str] = Field(None, description="Window start timestamp (ISO 8601)")
+    end_timestamp: Optional[str] = Field(None, description="Window end timestamp (ISO 8601)")
 
 
 # ============================================================================

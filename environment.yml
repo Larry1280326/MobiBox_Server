@@ -15,15 +15,8 @@ dependencies:
     - pydantic-settings
 
     # Database
-    - sqlalchemy
-    - alembic
-    - asyncpg  # PostgreSQL async driver
-    - psycopg2-binary  # PostgreSQL sync driver
-    - aiomysql  # MySQL async driver
-    - aiosqlite  # SQLite async driver
-
-    # Supabase
-    - supabase
+    - motor  # Async MongoDB driver
+    - pymongo  # Sync MongoDB driver (for PyTorch Dataset)
 
     # Authentication & Security
     - python-jose[cryptography]  # JWT tokens

@@ -57,10 +57,17 @@ async def fetch_summary_log(request: SummaryLogRequest):
             return SummaryLogResponse(status="success", data=None, has_new_log=has_new_log)
 
         formatted = format_summary_log(record)
+        # Extract date string for daily logs (frontend expects it at top level)
+        date_str = None
+        if request.log_type == "daily" and record.get("start_timestamp"):
+            start_ts = record.get("start_timestamp")
+            if hasattr(start_ts, "strftime"):
+                date_str = start_ts.strftime("%Y-%m-%d")
         return SummaryLogResponse(
             status="success",
             data=SummaryLogItem(**formatted),
             has_new_log=has_new_log,
+            date=date_str,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -162,9 +169,15 @@ async def fetch_atomic_activities(request: AtomicActivitiesRequest):
             duration=request.duration,
         )
 
+        # Extract timestamps from the data dict (pop separate from AtomicActivitiesData)
+        start_ts = data.pop("start_timestamp", None)
+        end_ts = data.pop("end_timestamp", None)
+
         return AtomicActivitiesResponse(
             status="success",
             data=AtomicActivitiesData(**data),
+            start_timestamp=start_ts,
+            end_timestamp=end_ts,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

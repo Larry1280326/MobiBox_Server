@@ -12,15 +12,12 @@ router = APIRouter(prefix="/upload", tags=["upload"])
 
 
 @router.post("/documents")
-def upload_documents(request: DocumentUploadRequest):
-
-    """Bulk upload document data to the uploads table."""
+async def upload_documents(request: DocumentUploadRequest):
+    """Bulk upload document data to the uploads collection."""
     try:
-        print(request.items[0])  # Debugging: 
-        result = upload_documents_service(request)
+        result = await upload_documents_service(request)
 
         # Trigger atomic activities processing for affected users
-        # Get unique users from the uploaded items
         users = list(set(item.user for item in request.items))
 
         # Queue the Celery task
@@ -32,15 +29,12 @@ def upload_documents(request: DocumentUploadRequest):
 
 
 @router.post("/imu")
-def upload_imu(request: IMUUploadRequest):
-    """Bulk upload IMU data to the imu table."""
+async def upload_imu(request: IMUUploadRequest):
+    """Bulk upload IMU data to the imu collection."""
     try:
-        print(request.items[:3])  # Debugging: print the incoming request items
-
-        result = upload_imu_service(request)
+        result = await upload_imu_service(request)
 
         # Trigger HAR processing for affected users
-        # Get unique users from the uploaded items
         users = list(set(item.user for item in request.items))
 
         # Queue the Celery task

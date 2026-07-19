@@ -31,7 +31,6 @@ from src.celery_app.services.intervention_service import (
     get_recent_summaries,
     insert_intervention,
 )
-from src.database import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -52,15 +51,13 @@ def generate_hourly_interventions() -> dict:
     Generate interventions based on recent summaries.
 
     Runs every hour via Celery Beat (5 minutes after summary generation).
-    Reads from summary_logs table instead of atomic_activities.
+    Reads from summary_logs collection instead of atomic_activities.
     """
     logger.info("Starting hourly intervention generation from summaries")
 
     async def process():
-        client = get_supabase_client()
-
         # Get recent summaries from the last hour
-        summaries = await get_recent_summaries(hours=1, client=client)
+        summaries = await get_recent_summaries(hours=1)
         logger.info(f"Found {len(summaries)} recent summaries")
 
         results = {
@@ -82,7 +79,7 @@ def generate_hourly_interventions() -> dict:
 
                 if intervention:
                     # Insert to database
-                    await insert_intervention(intervention, client)
+                    await insert_intervention(intervention)
                     results["processed"] += 1
                     results["interventions"].append({
                         "user": user,
@@ -118,10 +115,8 @@ def generate_hourly_summary() -> dict:
     logger.info("Starting hourly summary generation")
 
     async def process():
-        client = get_supabase_client()
-
         # Get users with activity in the last hour
-        users = await get_all_users_with_activities(hours=1, client=client)
+        users = await get_all_users_with_activities(hours=1)
         logger.info(f"Found {len(users)} users with recent activity")
 
         results = {
@@ -136,7 +131,7 @@ def generate_hourly_summary() -> dict:
             try:
                 # Use threshold-based summary generation with per-user timer
                 summary_log = await generate_summary_for_user(
-                    user, hours=1, log_type="hourly", client=client
+                    user, hours=1, log_type="hourly"
                 )
 
                 if summary_log:
@@ -170,10 +165,8 @@ def generate_daily_summary() -> dict:
     logger.info("Starting daily summary generation")
 
     async def process():
-        client = get_supabase_client()
-
         # Get users with activity in the last 24 hours
-        users = await get_all_users_with_activities(hours=24, client=client)
+        users = await get_all_users_with_activities(hours=24)
         logger.info(f"Found {len(users)} users with activity in the last 24 hours")
 
         results = {
@@ -186,7 +179,7 @@ def generate_daily_summary() -> dict:
         for user in users:
             try:
                 # Compress activities for the full day
-                compressed = await compress_atomic_activities(user, hours=24, client=client)
+                compressed = await compress_atomic_activities(user, hours=24)
 
                 if not compressed.get("total_records"):
                     results["skipped"] += 1
@@ -197,7 +190,7 @@ def generate_daily_summary() -> dict:
 
                 if summary_log:
                     # Insert to database
-                    await insert_summary_log(summary_log, client)
+                    await insert_summary_log(summary_log)
                     results["processed"] += 1
                     results["summaries"].append({
                         "user": user,
@@ -224,8 +217,6 @@ def trigger_intervention_for_user(user: str, hours: int = 1) -> dict:
     """
     Manually trigger intervention generation for a specific user.
 
-    Generates intervention based on the most recent summary for the user.
-
     Args:
         user: User identifier
         hours: Number of hours to look back for summaries (default: 1)
@@ -234,10 +225,8 @@ def trigger_intervention_for_user(user: str, hours: int = 1) -> dict:
         Generated intervention data
     """
     async def process():
-        client = get_supabase_client()
-
         # Get recent summaries for this user
-        summaries = await get_recent_summaries(hours=hours, client=client)
+        summaries = await get_recent_summaries(hours=hours)
         user_summaries = [s for s in summaries if s.get("user") == user]
 
         if not user_summaries:
@@ -248,7 +237,7 @@ def trigger_intervention_for_user(user: str, hours: int = 1) -> dict:
 
         intervention = await generate_intervention_from_summary(user, summary)
         if intervention:
-            await insert_intervention(intervention, client)
+            await insert_intervention(intervention)
 
         return intervention or {}
 
@@ -268,9 +257,7 @@ def trigger_summary_for_user(user: str, hours: int = 1) -> dict:
         Generated summary data
     """
     async def process():
-        client = get_supabase_client()
-
-        compressed = await compress_atomic_activities(user, hours=hours, client=client)
+        compressed = await compress_atomic_activities(user, hours=hours)
         if not compressed.get("total_records"):
             return {"error": "No activity data for user in specified period"}
 
@@ -278,7 +265,7 @@ def trigger_summary_for_user(user: str, hours: int = 1) -> dict:
         summary_log = await generate_summary(user, compressed, log_type=log_type)
 
         if summary_log:
-            await insert_summary_log(summary_log, client)
+            await insert_summary_log(summary_log)
 
         return summary_log or {}
 

@@ -15,9 +15,8 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 import numpy as np
-from supabase import Client
 
-from src.database import get_supabase_client
+from src.database import get_database
 from src.celery_app.config import (
     HAR_IMU_WINDOW_SECONDS,
     HAR_DATA_DELAY_SECONDS,
@@ -76,59 +75,33 @@ _imu_model_available = None
 async def get_imu_window(
     user: str,
     seconds: int = HAR_IMU_WINDOW_SECONDS,
-    client: Client | None = None,
 ) -> list[dict]:
     """
     Fetch IMU data for a user from a delayed time window.
-
-    Since IMU data is uploaded in batches every 2 minutes, we apply a delay
-    to ensure we're fetching data that has already been inserted.
-
-    Args:
-        user: User identifier
-        seconds: Number of seconds to look back (window size)
-        client: Optional Supabase client (creates new one if not provided)
-
-    Returns:
-        List of IMU data records
     """
-    if client is None:
-        client = get_supabase_client()
+    db = await get_database()
 
-    # Apply delay to account for batch upload timing:
-    # fetch data from (now - delay - seconds) to (now - delay)
     delayed_end = datetime.now(CHINA_TZ) - timedelta(seconds=HAR_DATA_DELAY_SECONDS)
     delayed_start = delayed_end - timedelta(seconds=seconds)
 
     logger.debug(
         "Fetching IMU window for %s: %s to %s (delay=%ss, window=%ss)",
-        user,
-        delayed_start.isoformat(),
-        delayed_end.isoformat(),
-        HAR_DATA_DELAY_SECONDS,
-        seconds,
+        user, delayed_start.isoformat(), delayed_end.isoformat(),
+        HAR_DATA_DELAY_SECONDS, seconds,
     )
 
-    response = await asyncio.to_thread(
-        lambda: client.table("imu")
-        .select("*")
-        .eq("user", user)
-        .gte("timestamp", delayed_start.isoformat())
-        .lte("timestamp", delayed_end.isoformat())
-        .order("timestamp", desc=False)
-        .execute()
-    )
+    cursor = db["imu"].find({
+        "user": user,
+        "timestamp": {"$gte": delayed_start, "$lte": delayed_end},
+    }).sort("timestamp", 1)
 
-    data = response.data if response.data else []
+    data = await cursor.to_list(None)
     logger.debug("Found %d IMU records for %s", len(data), user)
     return data
 
 
 def _imu_data_to_tensor(imu_data: list[dict]) -> np.ndarray:
-    """
-    Build a (1, window_size, input_dim) array from Supabase IMU list.
-    Truncates or zero-pads to HAR_IMU_WINDOW_SIZE; uses IMU_COLUMNS order.
-    """
+    """Build a (1, window_size, input_dim) array from IMU list."""
     n = len(imu_data)
     out = np.zeros((1, HAR_IMU_WINDOW_SIZE, HAR_IMU_INPUT_CHANNELS), dtype=np.float32)
     for i in range(min(n, HAR_IMU_WINDOW_SIZE)):
@@ -146,7 +119,6 @@ def _resolve_checkpoint_path() -> Path | None:
     path = Path(HAR_IMU_MODEL_CHECKPOINT)
     if path.is_file():
         return path
-    # Resolve relative to this package so it works regardless of cwd (e.g. Celery worker)
     ckpts_dir = Path(__file__).resolve().parent / "imu_model_utils" / "ckpts"
     fallback = ckpts_dir / path.name
     return fallback if fallback.is_file() else None
@@ -208,9 +180,8 @@ async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
     3. Mock model (fallback)
 
     Returns:
-        Tuple of (label, confidence, source) where source is "tsfm_model", "imu_model", or "mock_har".
+        Tuple of (label, confidence, source)
     """
-    # Check minimum samples
     if len(imu_data) < 1:
         logger.warning("No IMU data provided, returning unknown")
         return "unknown", 0.5, "insufficient_data"
@@ -258,25 +229,12 @@ async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
 
 
 async def run_mock_har_model(imu_data: list[dict]) -> tuple[str, float]:
-    """
-    Run mock HAR model on IMU data.
-
-    This simulates a HAR model that processes IMU data and returns
-    an activity label with confidence score.
-
-    Args:
-        imu_data: List of IMU sensor readings
-
-    Returns:
-        Tuple of (label, confidence)
-    """
-    # Simulate processing time
+    """Run mock HAR model on IMU data."""
     await asyncio.sleep(0.1)
 
     if not imu_data:
         return "unknown", 0.5
 
-    # Calculate average acceleration magnitude
     acc_magnitudes = []
     for sample in imu_data:
         acc_x = sample.get("acc_X", 0) or 0
@@ -287,8 +245,6 @@ async def run_mock_har_model(imu_data: list[dict]) -> tuple[str, float]:
 
     avg_magnitude = sum(acc_magnitudes) / len(acc_magnitudes) if acc_magnitudes else 0
 
-    # Mock classification based on acceleration magnitude (returns DB enum values)
-    # NOTE: "unknown" removed to verify if mock model is being used
     if avg_magnitude < 0.5:
         label = random.choice(["sitting", "lying", "standing"])
         confidence = 0.7 + random.random() * 0.2
@@ -310,70 +266,38 @@ async def insert_har_label(
     label: str,
     confidence: float = 1.0,
     source: str = "mock_har",
-    client: Client | None = None,
 ) -> dict:
-    """
-    Insert HAR label into the har table.
-
-    Database schema: har(id, timestamp, user, har_label, confidence, source)
-
-    Args:
-        user: User identifier
-        label: Activity label (stored as har_label)
-        confidence: Confidence score from model (0.0-1.0)
-        source: Source of label ('tsfm_model', 'imu_model', 'mock_har', 'insufficient_data')
-        client: Optional Supabase client
-
-    Returns:
-        Inserted record data
-    """
-    if client is None:
-        client = get_supabase_client()
+    """Insert HAR label into the har collection."""
+    db = await get_database()
 
     data = {
         "user": user,
         "har_label": label,
         "confidence": round(confidence, 2),
         "source": source,
-        "timestamp": datetime.now(CHINA_TZ).isoformat(),
+        "timestamp": datetime.now(CHINA_TZ),
     }
 
-    response = await asyncio.to_thread(
-        lambda: client.table("har").insert(data).execute()
-    )
-
-    return response.data[0] if response.data else {}
+    result = await db["har"].insert_one(data)
+    data["_id"] = result.inserted_id
+    return data
 
 
-async def process_har_for_user(user: str, client: Client | None = None) -> HARLabel | None:
+async def process_har_for_user(user: str) -> HARLabel | None:
     """
     Complete HAR processing pipeline for a single user.
 
     1. Fetch IMU data window
-    2. Run HAR model (IMU transformer if checkpoint set, else mock)
+    2. Run HAR model
     3. Insert result to database
-
-    Args:
-        user: User identifier
-        client: Optional Supabase client
-
-    Returns:
-        HARLabel if successful, None otherwise
     """
-    if client is None:
-        client = get_supabase_client()
-
-    # Get IMU data window
-    imu_data = await get_imu_window(user, HAR_IMU_WINDOW_SECONDS, client)
+    imu_data = await get_imu_window(user, HAR_IMU_WINDOW_SECONDS)
 
     if not imu_data:
         return None
 
-    # Run HAR model (IMU transformer if checkpoint set, else mock)
     label, confidence, source = await run_har_model(imu_data)
-
-    # Insert result
-    await insert_har_label(user, label, confidence, source, client)
+    await insert_har_label(user, label, confidence, source)
 
     return HARLabel(
         user=user,
@@ -386,59 +310,34 @@ async def process_har_for_user(user: str, client: Client | None = None) -> HARLa
 
 async def process_har_for_user_incremental(
     user: str,
-    client: Client | None = None,
 ) -> tuple[HARLabel | None, datetime | None]:
     """
     Incremental HAR processing pipeline with timestamp tracking.
-
-    Only processes new IMU data since last processed timestamp.
-    Updates the last processed timestamp after successful processing.
-
-    Args:
-        user: User identifier
-        client: Optional Supabase client
-
-    Returns:
-        Tuple of (HARLabel if successful, latest timestamp processed)
     """
-    if client is None:
-        client = get_supabase_client()
-
-    # Get last processed timestamp for this user
-    last_processed = await get_last_processed(user, "har", client)
+    last_processed = await get_last_processed(user, "har")
 
     if last_processed:
-        # Incremental: fetch only new data since last processed
-        imu_data = await get_imu_window_since(user, last_processed, client)
+        imu_data = await get_imu_window_since(user, last_processed)
         logger.debug(f"Processing HAR incrementally for {user} since {last_processed}")
     else:
-        # First time: use standard windowed fetch
-        imu_data = await get_imu_window(user, HAR_IMU_WINDOW_SECONDS, client)
+        imu_data = await get_imu_window(user, HAR_IMU_WINDOW_SECONDS)
         logger.debug(f"Processing HAR for {user} (first time, no last_processed)")
 
     if not imu_data:
         return None, None
 
-    # Run HAR model
     label, confidence, source = await run_har_model(imu_data)
 
-    # Get the latest timestamp from the processed data
     timestamps = [d.get("timestamp") for d in imu_data if d.get("timestamp")]
     latest_timestamp = None
     if timestamps:
-        # Parse the latest timestamp
-        ts_str = max(timestamps)
-        if isinstance(ts_str, str):
-            latest_timestamp = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        else:
-            latest_timestamp = ts_str
+        ts = max(timestamps)
+        latest_timestamp = ts if isinstance(ts, datetime) else ts
 
-    # Insert result
-    await insert_har_label(user, label, confidence, source, client)
+    await insert_har_label(user, label, confidence, source)
 
-    # Update last processed timestamp
     if latest_timestamp:
-        await update_last_processed(user, "har", latest_timestamp, client)
+        await update_last_processed(user, "har", latest_timestamp)
 
     har_label = HARLabel(
         user=user,

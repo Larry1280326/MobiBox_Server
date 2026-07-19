@@ -13,7 +13,7 @@ from src.celery_app.services.atomic_service import (
     insert_atomic_activity,
 )
 from src.celery_app.schemas.atomic_schemas import AtomicActivityResult
-from src.database import get_supabase_client
+from src.database import get_database
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,6 @@ def process_atomic_activities_batch(self, user_list: List[str]) -> dict:
     """
     logger.info(f"Processing atomic activities batch for {len(user_list)} users")
 
-    client = get_supabase_client()
     results = {
         "processed": 0,
         "skipped": 0,
@@ -84,10 +83,10 @@ def process_atomic_activities_batch(self, user_list: List[str]) -> dict:
 
             try:
                 # Generate all atomic labels
-                activity = await generate_all_atomic_labels(user, client)
+                activity = await generate_all_atomic_labels(user)
 
                 # Insert to database
-                await insert_atomic_activity(activity, client)
+                await insert_atomic_activity(activity)
 
                 results["processed"] += 1
                 results["activities"].append({
@@ -140,7 +139,6 @@ def process_atomic_periodic(self) -> dict:
     """
     logger.info("Running periodic atomic activities processing")
 
-    client = get_supabase_client()
     results = {
         "processed": 0,
         "skipped": 0,
@@ -149,35 +147,30 @@ def process_atomic_periodic(self) -> dict:
     }
 
     async def process_active_users():
-        import time
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
 
         from src.celery_app.config import ATOMIC_DEBOUNCE_SECONDS
 
         china_tz = ZoneInfo("Asia/Shanghai")
+        db = await get_database()
 
         # Look for users with recent uploads (document data)
         cutoff_time = datetime.now(china_tz) - timedelta(seconds=ATOMIC_DEBOUNCE_SECONDS)
 
-        logger.debug(
-            "Periodic atomic active-user cutoff: %s",
-            cutoff_time.isoformat(),
-        )
+        logger.debug("Periodic atomic active-user cutoff: %s", cutoff_time.isoformat())
 
-        response = await asyncio.to_thread(
-            lambda: client.table("uploads")
-            .select("user")
-            .gte("timestamp", cutoff_time.isoformat())
-            .execute()
-        )
+        docs = await db["uploads"].find(
+            {"timestamp": {"$gte": cutoff_time}},
+            {"user": 1},
+        ).to_list(None)
 
-        if not response.data:
+        if not docs:
             logger.debug("No users with recent uploads")
             return
 
         # Get unique users
-        users = list(set(item["user"] for item in response.data))
+        users = list(set(d["user"] for d in docs if "user" in d))
         logger.info(f"Found {len(users)} users with recent uploads")
 
         for user in users:
@@ -189,10 +182,10 @@ def process_atomic_periodic(self) -> dict:
 
             try:
                 # Generate all atomic labels
-                activity = await generate_all_atomic_labels(user, client)
+                activity = await generate_all_atomic_labels(user)
 
                 # Insert to database
-                await insert_atomic_activity(activity, client)
+                await insert_atomic_activity(activity)
 
                 results["processed"] += 1
                 results["activities"].append({

@@ -5,13 +5,13 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from src.database import get_supabase_client
+from src.database import get_database
 from src.imu_test.schemas import IMUTestRequest, IMUTestResponse, IMUTestResultRecord
 
 logger = logging.getLogger(__name__)
 
-# Table name for storing test results
-IMU_TEST_RESULTS_TABLE = "imu_test_results"
+# Collection name for storing test results
+IMU_TEST_RESULTS_COLLECTION = "imu_test_results"
 
 # Timeout for inference (30s to allow for model loading on first request)
 DEFAULT_INFERENCE_TIMEOUT = 30.0
@@ -94,7 +94,7 @@ async def save_test_result(result: IMUTestResponse) -> bool:
         True if saved successfully, False otherwise
     """
     try:
-        client = get_supabase_client()
+        db = await get_database()
 
         record = IMUTestResultRecord(
             user=result.user,
@@ -107,12 +107,10 @@ async def save_test_result(result: IMUTestResponse) -> bool:
             timestamp=result.timestamp.isoformat(),
         )
 
-        response = client.table(IMU_TEST_RESULTS_TABLE).insert(record.model_dump()).execute()
-
-        if response.data:
-            logger.info(f"Saved IMU test result for user {result.user}")
-            return True
-        return False
+        doc = record.model_dump()
+        await db[IMU_TEST_RESULTS_COLLECTION].insert_one(doc)
+        logger.info(f"Saved IMU test result for user {result.user}")
+        return True
 
     except Exception as e:
         logger.error(f"Failed to save IMU test result: {e}")
@@ -130,19 +128,17 @@ async def get_test_statistics(user: Optional[str] = None) -> dict:
         Dictionary with accuracy statistics
     """
     try:
-        client = get_supabase_client()
+        db = await get_database()
 
-        query = client.table(IMU_TEST_RESULTS_TABLE).select("*")
-
+        query = {}
         if user:
-            query = query.eq("user", user)
+            query["user"] = user
 
-        response = query.execute()
+        results = await db[IMU_TEST_RESULTS_COLLECTION].find(query).to_list(None)
 
-        if not response.data:
+        if not results:
             return {"total": 0, "correct": 0, "accuracy": None}
 
-        results = response.data
         total = len(results)
         correct = sum(1 for r in results if r.get("is_correct") is True)
 

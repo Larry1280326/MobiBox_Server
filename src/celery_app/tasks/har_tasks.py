@@ -14,7 +14,7 @@ from src.celery_app.config import (
     HAR_DATA_DELAY_SECONDS,
 )
 from src.celery_app.services.har_service import process_har_for_user
-from src.database import get_supabase_client
+from src.database import get_database
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,6 @@ def process_har_batch(self, user_list: List[str]) -> dict:
     """
     logger.info(f"Processing HAR batch for {len(user_list)} users")
 
-    client = get_supabase_client()
     results = {
         "processed": 0,
         "skipped": 0,
@@ -80,7 +79,7 @@ def process_har_batch(self, user_list: List[str]) -> dict:
                 continue
 
             try:
-                result = await process_har_for_user(user, client)
+                result = await process_har_for_user(user)
                 if result:
                     results["processed"] += 1
                     results["labels"].append({
@@ -135,7 +134,6 @@ def process_har_periodic(self) -> dict:
     """
     logger.info("Running periodic HAR processing")
 
-    client = get_supabase_client()
     results = {
         "processed": 0,
         "skipped": 0,
@@ -144,39 +142,33 @@ def process_har_periodic(self) -> dict:
     }
 
     async def process_active_users():
-        import time
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
 
         china_tz = ZoneInfo("Asia/Shanghai")
+        db = await get_database()
 
-        # Compute delayed window to match batch upload behavior:
-        # we look at [now - delay - window, now - delay]
+        # Compute delayed window to match batch upload behavior
         delayed_end = datetime.now(china_tz) - timedelta(seconds=HAR_DATA_DELAY_SECONDS)
         delayed_start = delayed_end - timedelta(seconds=HAR_IMU_WINDOW_SECONDS)
 
         logger.debug(
             "Periodic HAR active-user window: %s to %s (delay=%ss, window=%ss)",
-            delayed_start.isoformat(),
-            delayed_end.isoformat(),
-            HAR_DATA_DELAY_SECONDS,
-            HAR_IMU_WINDOW_SECONDS,
+            delayed_start.isoformat(), delayed_end.isoformat(),
+            HAR_DATA_DELAY_SECONDS, HAR_IMU_WINDOW_SECONDS,
         )
 
-        response = await asyncio.to_thread(
-            lambda: client.table("imu")
-            .select("user")
-            .gte("timestamp", delayed_start.isoformat())
-            .lte("timestamp", delayed_end.isoformat())
-            .execute()
-        )
+        docs = await db["imu"].find(
+            {"timestamp": {"$gte": delayed_start, "$lte": delayed_end}},
+            {"user": 1},
+        ).to_list(None)
 
-        if not response.data:
+        if not docs:
             logger.debug("No users with IMU data in delayed window")
             return
 
         # Get unique users
-        users = list(set(item["user"] for item in response.data))
+        users = list(set(d["user"] for d in docs if "user" in d))
         logger.info(f"Found {len(users)} users with IMU data in delayed window")
 
         for user in users:
@@ -187,7 +179,7 @@ def process_har_periodic(self) -> dict:
                 continue
 
             try:
-                result = await process_har_for_user(user, client)
+                result = await process_har_for_user(user)
                 if result:
                     results["processed"] += 1
                     results["labels"].append({

@@ -2,25 +2,22 @@
 
 from datetime import datetime
 
-from src.database import get_supabase_client
+from src.database import get_database
 from src.upload.constants import (
     DOCUMENTS_OPTIONAL_FIELDS,
     IMU_OPTIONAL_FIELDS,
-    UPLOADS_TABLE,
-    IMU_TABLE,
+    UPLOADS_COLLECTION,
+    IMU_COLLECTION,
 )
-from src.upload.schemas import DocumentUploadRequest, IMUUploadRequest
 
 
 def _coerce_for_db(value) -> object:
-    """Coerce values for DB compatibility.
-    - Floats that are whole numbers become int (fixes smallint columns).
-    - datetime objects become ISO format strings for PostgreSQL.
+    """Coerce values for MongoDB compatibility.
+    - Floats that are whole numbers become int
+    - datetime objects remain as datetime (MongoDB handles them natively)
     """
     if isinstance(value, float) and value == int(value):
         return int(value)
-    if isinstance(value, datetime):
-        return value.isoformat()
     return value
 
 
@@ -34,40 +31,34 @@ def _build_data_dict(item: object, optional_fields: list[str]) -> dict:
     return data
 
 
-def upload_documents(request: DocumentUploadRequest) -> dict:
-    """Bulk insert document data into the uploads table."""
-    client = get_supabase_client()
+async def upload_documents(request) -> dict:
+    """Bulk insert document data into the uploads collection."""
+    db = await get_database()
     rows = [_build_data_dict(item, DOCUMENTS_OPTIONAL_FIELDS) for item in request.items]
-    response = client.table(UPLOADS_TABLE).insert(rows).execute()
-    return {"status": "success", "inserted": len(rows), "data": response.data}
+    result = await db[UPLOADS_COLLECTION].insert_many(rows)
+    return {"status": "success", "inserted": len(result.inserted_ids)}
 
 
-def upload_imu(request: IMUUploadRequest) -> dict:
-    """Bulk insert IMU data into the imu table.
+async def upload_imu(request) -> dict:
+    """Bulk insert IMU data into the imu collection.
 
     This function is optimized for large payloads by inserting records in chunks
     instead of building a single huge list of rows in memory.
     """
-    client = get_supabase_client()
+    db = await get_database()
 
     total_items = len(request.items)
-    # Tune this chunk size based on typical payload sizes and Supabase limits.
     chunk_size = 1_000
-
-    last_response = None
     inserted_count = 0
 
     for start in range(0, total_items, chunk_size):
         end = start + chunk_size
         chunk = request.items[start:end]
         rows = [_build_data_dict(item, IMU_OPTIONAL_FIELDS) for item in chunk]
-
-        # Perform the batched insert.
-        last_response = client.table(IMU_TABLE).insert(rows).execute()
-        inserted_count += len(rows)
+        result = await db[IMU_COLLECTION].insert_many(rows)
+        inserted_count += len(result.inserted_ids)
 
     return {
         "status": "success",
         "inserted": inserted_count,
-        "data": getattr(last_response, "data", None) if last_response is not None else None,
     }

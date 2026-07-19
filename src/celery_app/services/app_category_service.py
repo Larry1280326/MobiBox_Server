@@ -6,15 +6,12 @@ This module provides efficient app categorization using:
 3. LLM fallback for unknown apps (slower but accurate)
 """
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, NamedTuple
 from zoneinfo import ZoneInfo
 
-from supabase import Client
-
-from src.database import get_supabase_client
+from src.database import get_database
 from src.llm_utils.services import query_llm
 
 logger = logging.getLogger(__name__)
@@ -28,24 +25,23 @@ class AppCategoryResult(NamedTuple):
     category: str
     source: str  # 'lookup', 'db_cache', or 'llm'
 
+
 # =============================================================================
 # Predefined App Categories (In-Memory Cache)
 # =============================================================================
 
-# Common apps with predefined categories (seed data)
-# These are the most popular apps that don't need LLM classification
 APP_CATEGORY_CACHE = {
     # Social communication
     "com.whatsapp": "social communication app",
     "com.whatsapp.w4w": "social communication app",
     "com.facebook.katana": "social communication app",
-    "com.facebook.orca": "social communication app",  # Messenger
+    "com.facebook.orca": "social communication app",
     "com.instagram.android": "social communication app",
-    "com.tencent.mm": "social communication app",  # WeChat
-    "com.tencent.mobileqq": "social communication app",  # QQ
+    "com.tencent.mm": "social communication app",
+    "com.tencent.mobileqq": "social communication app",
     "com.tencent.tim": "social communication app",
-    "com.ss.android.ugc.aweme": "social communication app",  # TikTok/Douyin
-    "com.zhiliaoapp.musically": "social communication app",  # TikTok
+    "com.ss.android.ugc.aweme": "social communication app",
+    "com.zhiliaoapp.musically": "social communication app",
     "com.snapchat.android": "social communication app",
     "com.twitter.android": "social communication app",
     "com.linkedin.android": "social communication app",
@@ -61,20 +57,20 @@ APP_CATEGORY_CACHE = {
     "com.netflix.mediaclient": "video and music app",
     "com.spotify.music": "video and music app",
     "com.spotify": "video and music app",
-    "com.tencent.qqlive": "video and music app",  # Tencent Video
-    "com.youku.phone": "video and music app",  # Youku
-    "com.duowan.kiwi": "video and music app",  # Huya
-    "com.smile.gifmaker": "video and music app",  # Kuaishou
-    "com.netease.cloudmusic": "video and music app",  # NetEase Music
-    "com.kugou.android": "video and music app",  # Kugou Music
-    "com.tencent.karaoke": "video and music app",  # WeSing
+    "com.tencent.qqlive": "video and music app",
+    "com.youku.phone": "video and music app",
+    "com.duowan.kiwi": "video and music app",
+    "com.smile.gifmaker": "video and music app",
+    "com.netease.cloudmusic": "video and music app",
+    "com.kugou.android": "video and music app",
+    "com.tencent.karaoke": "video and music app",
     "com.apple.music": "video and music app",
     "com.amazon.mp3": "video and music app",
 
     # Games and Gaming
-    "com.tencent.tmgp.sgame": "games or gaming platform",  # Honor of Kings
-    "com.tencent.tmgp.pubgmhd": "games or gaming platform",  # PUBG Mobile
-    "com.tencent.ldj": "games or gaming platform",  # Game for Peace
+    "com.tencent.tmgp.sgame": "games or gaming platform",
+    "com.tencent.tmgp.pubgmhd": "games or gaming platform",
+    "com.tencent.ldj": "games or gaming platform",
     "com.mojang.minecraftpe": "games or gaming platform",
     "com.roblox.client": "games or gaming platform",
     "com.supercell.clashofclans": "games or gaming platform",
@@ -86,15 +82,15 @@ APP_CATEGORY_CACHE = {
     "com.alibaba.android.rimet": "e-commerce/shopping platform",
     "com.taobao.taobao": "e-commerce/shopping platform",
     "com.tmall.wireless": "e-commerce/shopping platform",
-    "com.jingdong.app.mall": "e-commerce/shopping platform",  # JD
+    "com.jingdong.app.mall": "e-commerce/shopping platform",
     "com.pinduoduo": "e-commerce/shopping platform",
     "com.xunmeng.pinduoduo": "e-commerce/shopping platform",
     "com.amazon.mShop.android.shopping": "e-commerce/shopping platform",
     "com.amazon.mobile.shopping": "e-commerce/shopping platform",
     "com.ebay.mobile": "e-commerce/shopping platform",
     "com.alibaba.aliexpress": "e-commerce/shopping platform",
-    "me.ele": "e-commerce/shopping platform",  # Ele.me
-    "com.sankuai.meituan": "e-commerce/shopping platform",  # Meituan
+    "me.ele": "e-commerce/shopping platform",
+    "com.sankuai.meituan": "e-commerce/shopping platform",
     "com.sankuai.meituan.takeoutnew": "e-commerce/shopping platform",
 
     # Office/Working
@@ -111,9 +107,9 @@ APP_CATEGORY_CACHE = {
     "com.google.android.apps.docs.editors.docs": "office/working app",
     "com.google.android.apps.docs.editors.sheets": "office/working app",
     "com.google.android.apps.docs.editors.slides": "office/working app",
-    "com.tencent.wework": "office/working app",  # WeCom
+    "com.tencent.wework": "office/working app",
     "com.tencent.docs": "office/working app",
-    "com.feichen.feishu": "office/working app",  # Feishu/Lark
+    "com.feichen.feishu": "office/working app",
     "com.ss.android.lark": "office/working app",
     "com.atlassian.jira": "office/working app",
     "com.slack": "office/working app",
@@ -122,12 +118,12 @@ APP_CATEGORY_CACHE = {
 
     # Learning and Education
     "com.duolingo": "learning and education app",
-    "com.zhihu.android": "learning and education app",  # Zhihu
+    "com.zhihu.android": "learning and education app",
     "com.coursera.android": "learning and education app",
     "org.khanacademy.android": "learning and education app",
     "com.udemy.android": "learning and education app",
     "com.brainly": "learning and education app",
-    "com.chaoxing": "learning and education app",  # Chaoxing/Xuexitong
+    "com.chaoxing": "learning and education app",
     "cn.com.open.mooc": "learning and education app",
     "com.wonder.legal": "learning and education app",
 
@@ -146,10 +142,10 @@ APP_CATEGORY_CACHE = {
     "com.alipay.android": "financial services app",
     "com.eg.android.AlipayGphone": "financial services app",
     "com.tencent.mm.plugin.wallet": "financial services app",
-    "com.icbc": "financial services app",  # ICBC
-    "com.ccb": "financial services app",  # CCB
-    "com.boc": "financial services app",  # Bank of China
-    "com.cmbchina": "financial services app",  # China Merchants Bank
+    "com.icbc": "financial services app",
+    "com.ccb": "financial services app",
+    "com.boc": "financial services app",
+    "com.cmbchina": "financial services app",
     "com.chase": "financial services app",
     "com.paypal.android.p2pmobile": "financial services app",
     "com.venmo": "financial services app",
@@ -158,7 +154,7 @@ APP_CATEGORY_CACHE = {
     "com.netease.news": "news/reading app",
     "com.sina.news": "news/reading app",
     "com.tencent.news": "news/reading app",
-    "com.toutiao": "news/reading app",  # Toutiao
+    "com.toutiao": "news/reading app",
     "com.ss.android.article.news": "news/reading app",
     "com.nytimes.android": "news/reading app",
     "com.bbc.news": "news/reading app",
@@ -169,7 +165,7 @@ APP_CATEGORY_CACHE = {
     "com.google.android.googlequicksearchbox": "tool/engineering/functional app",
     "com.google.android.apps.maps": "tool/engineering/functional app",
     "com.google.android.apps.nav": "tool/engineering/functional app",
-    "com.autonavi.minimap": "tool/engineering/functional app",  # Amap/Gaode
+    "com.autonavi.minimap": "tool/engineering/functional app",
     "com.baidu.map": "tool/engineering/functional app",
     "com.sogou.map": "tool/engineering/functional app",
     "com.google.android.apps.photos": "tool/engineering/functional app",
@@ -187,7 +183,6 @@ APP_CATEGORY_CACHE = {
     "com.flutter.forex": "tool/engineering/functional app",
 }
 
-# Valid app categories (must match LLM output)
 APP_CATEGORIES = [
     "social communication app",
     "common life app",
@@ -210,58 +205,34 @@ APP_CATEGORIES = [
 # =============================================================================
 
 
-async def lookup_app_category_in_db(app_name: str, client: Client) -> Optional[str]:
-    """Look up app category in database cache.
-
-    Args:
-        app_name: App package name
-        client: Supabase client
-
-    Returns:
-        Category string if found, None otherwise
-    """
+async def lookup_app_category_in_db(app_name: str) -> Optional[str]:
+    """Look up app category in database cache."""
+    db = await get_database()
     try:
-        response = await asyncio.to_thread(
-            lambda: client.table("app_categories")
-            .select("category")
-            .eq("app_name", app_name)
-            .limit(1)
-            .execute()
+        doc = await db["app_categories"].find_one(
+            {"_id": app_name},
+            {"category": 1},
         )
-        if response.data:
-            return response.data[0].get("category")
+        if doc:
+            return doc.get("category")
     except Exception as e:
         logger.debug(f"Error looking up app category in DB: {e}")
     return None
 
 
-async def cache_app_category_in_db(
-    app_name: str,
-    category: str,
-    source: str,
-    client: Client,
-) -> bool:
-    """Cache app category in database for future lookups.
-
-    Args:
-        app_name: App package name
-        category: Category string
-        source: Source of classification ('lookup' or 'llm')
-        client: Supabase client
-
-    Returns:
-        True if cached successfully
-    """
+async def cache_app_category_in_db(app_name: str, category: str, source: str) -> bool:
+    """Cache app category in database for future lookups."""
+    db = await get_database()
     try:
-        await asyncio.to_thread(
-            lambda: client.table("app_categories")
-            .upsert({
+        await db["app_categories"].update_one(
+            {"_id": app_name},
+            {"$set": {
                 "app_name": app_name,
                 "category": category,
                 "source": source,
-                "created_at": datetime.now(CHINA_TZ).isoformat(),
-            }, on_conflict="app_name")
-            .execute()
+                "created_at": datetime.now(CHINA_TZ),
+            }},
+            upsert=True,
         )
         return True
     except Exception as e:
@@ -275,14 +246,7 @@ async def cache_app_category_in_db(
 
 
 async def classify_app_via_llm(app_name: str) -> Optional[str]:
-    """Classify app using LLM.
-
-    Args:
-        app_name: App package name
-
-    Returns:
-        Category string from LLM
-    """
+    """Classify app using LLM."""
     system_prompt = """You are an app usage analyst. Categorize the user's current app usage into one of these categories:
 - social communication app (Facebook, Instagram, WhatsApp, etc.)
 - common life app (daily utilities)
@@ -306,12 +270,10 @@ Return only the category name exactly as listed above."""
         result = await query_llm(system_prompt, user_prompt, temperature=0.1)
         category = result.strip().lower()
 
-        # Validate category is in the expected list
         for valid_cat in APP_CATEGORIES:
             if valid_cat in category:
                 return valid_cat
 
-        # If no match, return as uncertain
         logger.warning(f"LLM returned unexpected category '{category}' for app '{app_name}'")
         return "uncertain"
     except Exception as e:
@@ -324,30 +286,13 @@ Return only the category name exactly as listed above."""
 # =============================================================================
 
 
-async def get_app_category(app_name: str, client: Client | None = None) -> Optional[str]:
-    """Get app category using table lookup first, then LLM fallback.
-
-    Priority:
-    1. In-memory cache (fastest)
-    2. Database cache (fast)
-    3. LLM classification (accurate but slower)
-    4. Return 'uncertain' as fallback
-
-    Args:
-        app_name: App package name (e.g., 'com.whatsapp')
-        client: Optional Supabase client
-
-    Returns:
-        Category string
-    """
-    result = await get_app_category_with_details(app_name, client)
+async def get_app_category(app_name: str) -> Optional[str]:
+    """Get app category using table lookup first, then LLM fallback."""
+    result = await get_app_category_with_details(app_name)
     return result.category if result else "uncertain"
 
 
-async def get_app_category_with_details(
-    app_name: str,
-    client: Client | None = None,
-) -> Optional[AppCategoryResult]:
+async def get_app_category_with_details(app_name: str) -> Optional[AppCategoryResult]:
     """Get app category with full details (app_name, category, source).
 
     Priority:
@@ -355,21 +300,13 @@ async def get_app_category_with_details(
     2. Database cache (fast)
     3. LLM classification (accurate but slower)
     4. Return 'uncertain' as fallback
-
-    Args:
-        app_name: App package name (e.g., 'com.whatsapp')
-        client: Optional Supabase client
-
-    Returns:
-        AppCategoryResult with app_name, category, and source
     """
     if not app_name:
         return AppCategoryResult(app_name="", category="uncertain", source="none")
 
-    # Normalize app name
     normalized_name = app_name.strip().lower()
 
-    # 1. Check in-memory cache first (fastest)
+    # 1. Check in-memory cache first
     if normalized_name in APP_CATEGORY_CACHE:
         logger.debug(f"Using in-memory cached category for '{normalized_name}'")
         return AppCategoryResult(
@@ -378,12 +315,8 @@ async def get_app_category_with_details(
             source="lookup"
         )
 
-    # Create client if not provided
-    if client is None:
-        client = get_supabase_client()
-
-    # 2. Check database cache (for previously classified apps)
-    cached = await lookup_app_category_in_db(normalized_name, client)
+    # 2. Check database cache
+    cached = await lookup_app_category_in_db(normalized_name)
     if cached:
         logger.debug(f"Using DB cached category for '{normalized_name}': {cached}")
         return AppCategoryResult(
@@ -398,35 +331,19 @@ async def get_app_category_with_details(
 
     if category:
         # 4. Cache result in database for future use
-        await cache_app_category_in_db(normalized_name, category, "llm", client)
+        await cache_app_category_in_db(normalized_name, category, "llm")
         return AppCategoryResult(
             app_name=normalized_name,
             category=category,
             source="llm"
         )
 
-    # Fallback to uncertain
     return AppCategoryResult(app_name=normalized_name, category="uncertain", source="none")
 
 
-async def get_app_categories_batch(
-    app_names: list[str],
-    client: Client | None = None,
-) -> dict[str, str]:
-    """Get categories for multiple apps efficiently.
-
-    Batch version that minimizes DB queries and LLM calls.
-
-    Args:
-        app_names: List of app package names
-        client: Optional Supabase client
-
-    Returns:
-        Dict mapping app_name -> category
-    """
-    if client is None:
-        client = get_supabase_client()
-
+async def get_app_categories_batch(app_names: list[str]) -> dict[str, str]:
+    """Get categories for multiple apps efficiently."""
+    db = await get_database()
     results = {}
     apps_needing_llm = []
 
@@ -437,38 +354,34 @@ async def get_app_categories_batch(
 
         normalized = app_name.strip().lower()
 
-        # Check in-memory cache
         if normalized in APP_CATEGORY_CACHE:
             results[app_name] = APP_CATEGORY_CACHE[normalized]
         else:
             apps_needing_llm.append(normalized)
 
-    # Batch lookup in database for apps not in memory
     if apps_needing_llm:
         try:
-            response = await asyncio.to_thread(
-                lambda: client.table("app_categories")
-                .select("app_name, category")
-                .in_("app_name", apps_needing_llm)
-                .execute()
+            cursor = db["app_categories"].find(
+                {"_id": {"$in": apps_needing_llm}},
+                {"category": 1},
             )
+            db_docs = await cursor.to_list(None)
+            db_results = {d["_id"]: d["category"] for d in db_docs}
 
-            db_results = {r["app_name"]: r["category"] for r in (response.data or [])}
-
+            remaining = []
             for app_name in apps_needing_llm:
                 if app_name in db_results:
                     results[app_name] = db_results[app_name]
-                    # Remove from needs LLM list
-                    apps_needing_llm.remove(app_name)
+                else:
+                    remaining.append(app_name)
+            apps_needing_llm = remaining
         except Exception as e:
             logger.warning(f"Error in batch DB lookup: {e}")
 
-    # Classify remaining apps via LLM (could be further optimized with batch LLM calls)
     for app_name in apps_needing_llm:
         if app_name not in results:
             category = await classify_app_via_llm(app_name)
             results[app_name] = category or "uncertain"
-            # Cache in database
-            await cache_app_category_in_db(app_name, results[app_name], "llm", client)
+            await cache_app_category_in_db(app_name, results[app_name], "llm")
 
     return results
