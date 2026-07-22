@@ -60,7 +60,7 @@ Return a JSON object with:
 - priority: "low", "medium", or "high" based on urgency
 - category: "physical", "mental", "social", or "digital_wellbeing" """
 
-    summary_text = summary_log.get("summary", "No summary available").replace("{", "{{").replace("}", "}}")
+    summary_text = summary_log.get("summary", "No summary available")
 
     user_prompt = f"""User activity summary:
 

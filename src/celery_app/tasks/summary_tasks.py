@@ -36,13 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 def _run_async(coro):
-    """Run async coroutine in sync context."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    """Run async coroutine in sync context using Python's standard runner."""
+    return asyncio.run(coro)
 
 
 @celery_app.task(name="generate_hourly_interventions")
@@ -130,7 +125,7 @@ def generate_hourly_summary() -> dict:
         for user in users:
             try:
                 # Use threshold-based summary generation with per-user timer
-                summary_log = await generate_summary_for_user(
+                summary_log, skip_reason = await generate_summary_for_user(
                     user, hours=1, log_type="hourly"
                 )
 
@@ -142,6 +137,8 @@ def generate_hourly_summary() -> dict:
                     })
                 else:
                     results["skipped"] += 1
+                    if skip_reason:
+                        results["skip_reasons"][user] = skip_reason
 
             except Exception as e:
                 logger.error(f"Error generating summary for user {user}: {e}")
@@ -161,6 +158,10 @@ def generate_daily_summary() -> dict:
 
     Runs once daily at midnight via Celery Beat.
     Creates a comprehensive summary of the user's day.
+
+    Uses the same threshold-gating and state-tracking as hourly summaries
+    (via generate_summary_for_user), but skips the hourly-specific timing
+    checks (data_collection_start, inter-summary gap).
     """
     logger.info("Starting daily summary generation")
 
@@ -174,23 +175,16 @@ def generate_daily_summary() -> dict:
             "skipped": 0,
             "errors": 0,
             "summaries": [],
+            "skip_reasons": {},
         }
 
         for user in users:
             try:
-                # Compress activities for the full day
-                compressed = await compress_atomic_activities(user, hours=24)
-
-                if not compressed.get("total_records"):
-                    results["skipped"] += 1
-                    continue
-
-                # Generate daily summary
-                summary_log = await generate_summary(user, compressed, log_type="daily")
+                summary_log, skip_reason = await generate_summary_for_user(
+                    user, hours=24, log_type="daily"
+                )
 
                 if summary_log:
-                    # Insert to database
-                    await insert_summary_log(summary_log)
                     results["processed"] += 1
                     results["summaries"].append({
                         "user": user,
@@ -198,6 +192,8 @@ def generate_daily_summary() -> dict:
                     })
                 else:
                     results["skipped"] += 1
+                    if skip_reason:
+                        results["skip_reasons"][user] = skip_reason
 
             except Exception as e:
                 logger.error(f"Error generating daily summary for user {user}: {e}")

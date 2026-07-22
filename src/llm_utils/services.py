@@ -11,6 +11,7 @@ import time
 from typing import Type, TypeVar
 from pydantic import BaseModel
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -117,8 +118,8 @@ async def query_llm(
     )
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("user", user_prompt),
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt),
     ])
 
     chain = prompt | llm | StrOutputParser()
@@ -158,8 +159,8 @@ async def generate_structured_output(
     )
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("user", user_prompt),
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt),
     ])
 
     # Use with_structured_output for models that support it
@@ -188,8 +189,8 @@ async def generate_structured_output(
         json_system_prompt = f"{system_prompt}\n\nYou must respond with valid JSON only."
 
         chain = ChatPromptTemplate.from_messages([
-            ("system", json_system_prompt),
-            ("user", user_prompt),
+            SystemMessage(content=json_system_prompt),
+            HumanMessage(content=user_prompt),
         ]) | llm_json | StrOutputParser()
 
         result_str = await chain.ainvoke({})

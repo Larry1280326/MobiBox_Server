@@ -167,17 +167,14 @@ Return a JSON object with:
 - highlights: list of 2-3 notable points
 - recommendations: list of 1-2 suggestions"""
 
-    def fmt(d):
-        return json.dumps(d).replace("{", "{{").replace("}", "}}")
-
     user_prompt = f"""User activity summary for the past {period_desc}:
 
-Activity patterns: {fmt(summary.get('har', {}))}
-App usage: {fmt(summary.get('app_usage', {}))}
-Phone usage: {fmt(summary.get('phone_usage', {}))}
-Social context: {fmt(summary.get('social', {}))}
-Movement: {fmt(summary.get('movement', {}))}
-Location: {fmt(summary.get('location', {}))}
+Activity patterns: {json.dumps(summary.get('har', {}))}
+App usage: {json.dumps(summary.get('app_usage', {}))}
+Phone usage: {json.dumps(summary.get('phone_usage', {}))}
+Social context: {json.dumps(summary.get('social', {}))}
+Movement: {json.dumps(summary.get('movement', {}))}
+Location: {json.dumps(summary.get('location', {}))}
 
 Dominant activity: {dominant.get('activity')}
 Dominant app category: {dominant.get('app_category')}
@@ -281,19 +278,27 @@ async def generate_summary_for_user(
     user: str,
     hours: int,
     log_type: str,
-) -> Optional[dict]:
-    """Generate summary for a user with threshold checks and timestamp tracking."""
+) -> tuple[Optional[dict], Optional[str]]:
+    """Generate summary for a user with threshold checks and timestamp tracking.
+
+    Returns:
+        Tuple of (summary_log_dict, skip_reason).
+        - On success: (summary_dict, None)
+        - On skip: (None, reason_string)
+        - On generation failure: (None, "Summary generation failed")
+    """
     if log_type == "hourly":
         is_ready, reason = await check_user_hourly_ready(user)
         if not is_ready:
             logger.info(f"Skipping {user}: {reason}")
-            return None
+            return None, reason
 
     has_enough, compressed = await should_generate_summary(user, hours)
     if not has_enough:
         total_records = compressed.get("total_records", 0)
-        logger.info(f"Skipping {user}: insufficient data (records={total_records}, need={MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG})")
-        return None
+        reason = f"Insufficient data (records={total_records}, need={MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG})"
+        logger.info(f"Skipping {user}: {reason}")
+        return None, reason
 
     summary_log = await generate_summary(user, compressed, log_type=log_type)
 
@@ -301,6 +306,6 @@ async def generate_summary_for_user(
         await insert_summary_log(summary_log)
         await update_last_summary_generated(user)
         logger.info(f"Generated {log_type} summary for {user}")
-        return summary_log
+        return summary_log, None
 
-    return None
+    return None, "Summary generation failed"
