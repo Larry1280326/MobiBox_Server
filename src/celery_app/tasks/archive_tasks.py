@@ -56,7 +56,7 @@ def archive_data_periodic(self) -> dict:
         return results
 
     except Exception as e:
-        logger.error(f"Archival task failed: {e}")
+        logger.error(f"Archival task failed: {e}", exc_info=True)
         return {"error": str(e)}
 
 
@@ -126,7 +126,9 @@ def get_archive_stats() -> dict:
                     "retention_days": retention_days,
                 }
             except Exception as e:
-                logger.error(f"Failed to get stats for {table_name}: {e}")
+                logger.error(
+                    f"Failed to get stats for {table_name}: {e}", exc_info=True
+                )
                 stats[table_name] = {"error": str(e)}
 
         return stats

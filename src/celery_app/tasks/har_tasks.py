@@ -92,7 +92,9 @@ def process_har_batch(self, user_list: List[str]) -> dict:
                     results["skipped"] += 1
                     logger.debug(f"No IMU data for user {user}")
             except Exception as e:
-                logger.error(f"Error processing HAR for user {user}: {e}")
+                logger.error(
+                    f"Error processing HAR for user {user}: {e}", exc_info=True
+                )
                 results["errors"] += 1
 
     _run_async(process_all())
@@ -192,7 +194,9 @@ def process_har_periodic(self) -> dict:
                     results["skipped"] += 1
                     logger.debug(f"No IMU data for user {user}")
             except Exception as e:
-                logger.error(f"Error processing HAR for user {user}: {e}")
+                logger.error(
+                    f"Error processing HAR for user {user}: {e}", exc_info=True
+                )
                 results["errors"] += 1
 
     _run_async(process_active_users())

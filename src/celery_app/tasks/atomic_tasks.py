@@ -97,7 +97,10 @@ def process_atomic_activities_batch(self, user_list: List[str]) -> dict:
                 _mark_user_processed(user)
 
             except Exception as e:
-                logger.error(f"Error processing atomic activities for user {user}: {e}")
+                logger.error(
+                    f"Error processing atomic activities for user {user}: {e}",
+                    exc_info=True,
+                )
                 results["errors"] += 1
 
     _run_async(process_all())
@@ -196,7 +199,10 @@ def process_atomic_periodic(self) -> dict:
                 _mark_user_processed(user)
 
             except Exception as e:
-                logger.error(f"Error processing atomic activities for user {user}: {e}")
+                logger.error(
+                    f"Error processing atomic activities for user {user}: {e}",
+                    exc_info=True,
+                )
                 results["errors"] += 1
 
     _run_async(process_active_users())

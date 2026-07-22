@@ -83,7 +83,10 @@ def generate_hourly_interventions() -> dict:
                     results["skipped"] += 1
 
             except Exception as e:
-                logger.error(f"Error generating intervention for user {user}: {e}")
+                logger.error(
+                    f"Error generating intervention for user {user}: {e}",
+                    exc_info=True,
+                )
                 results["errors"] += 1
 
         return results
@@ -141,7 +144,10 @@ def generate_hourly_summary() -> dict:
                         results["skip_reasons"][user] = skip_reason
 
             except Exception as e:
-                logger.error(f"Error generating summary for user {user}: {e}")
+                logger.error(
+                    f"Error generating summary for user {user}: {e}",
+                    exc_info=True,
+                )
                 results["errors"] += 1
 
         return results
@@ -196,7 +202,10 @@ def generate_daily_summary() -> dict:
                         results["skip_reasons"][user] = skip_reason
 
             except Exception as e:
-                logger.error(f"Error generating daily summary for user {user}: {e}")
+                logger.error(
+                    f"Error generating daily summary for user {user}: {e}",
+                    exc_info=True,
+                )
                 results["errors"] += 1
 
         return results
