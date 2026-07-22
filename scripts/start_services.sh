@@ -80,9 +80,31 @@ wait_for_service() {
 }
 
 # =========================================
-# Step 1: Check/Start RabbitMQ
+# Step 1: Check/Start MongoDB
 # =========================================
-echo -e "${BLUE}Step 1: RabbitMQ (Message Queue)${NC}"
+echo -e "${BLUE}Step 1: MongoDB (Database)${NC}"
+
+if docker ps | grep -q mobibox-mongo; then
+    echo -e "${GREEN}✓ MongoDB container is already running${NC}"
+else
+    echo -e "${YELLOW}Starting MongoDB container...${NC}"
+    docker run -d --name mobibox-mongo \
+        -p 27017:27017 \
+        -v mobibox_mongo_data:/data/db \
+        mongo:7 2>/dev/null || {
+        echo -e "${YELLOW}Container may already exist, starting it...${NC}"
+        docker start mobibox-mongo 2>/dev/null || {
+            echo -e "${RED}Error: Failed to start MongoDB${NC}"
+            echo -e "${YELLOW}Continuing without MongoDB — endpoints requiring DB will fail.${NC}"
+        }
+    }
+    sleep 3  # Wait for MongoDB to initialize
+fi
+
+# =========================================
+# Step 2: Check/Start RabbitMQ
+# =========================================
+echo -e "${BLUE}Step 2: RabbitMQ (Message Queue)${NC}"
 
 if docker ps | grep -q rabbitmq; then
     echo -e "${GREEN}✓ RabbitMQ container is already running${NC}"
@@ -99,9 +121,9 @@ else
 fi
 
 # =========================================
-# Step 2: Start FastAPI Server
+# Step 3: Start FastAPI Server
 # =========================================
-echo -e "${BLUE}Step 2: FastAPI Server${NC}"
+echo -e "${BLUE}Step 3: FastAPI Server${NC}"
 
 if check_port 8000; then
     echo -e "${YELLOW}Port 8000 is already in use. Skipping FastAPI server startup.${NC}"
@@ -117,9 +139,9 @@ else
 fi
 
 # =========================================
-# Step 3: Start Celery Worker
+# Step 4: Start Celery Worker
 # =========================================
-echo -e "${BLUE}Step 3: Celery Worker${NC}"
+echo -e "${BLUE}Step 4: Celery Worker${NC}"
 
 # Check if celery worker is running
 if pgrep -f "celery.*worker" > /dev/null; then
@@ -137,9 +159,9 @@ else
 fi
 
 # =========================================
-# Step 4: Start Celery Beat (Scheduler)
+# Step 5: Start Celery Beat (Scheduler)
 # =========================================
-echo -e "${BLUE}Step 4: Celery Beat (Scheduler)${NC}"
+echo -e "${BLUE}Step 5: Celery Beat (Scheduler)${NC}"
 
 # Check if celery beat is running
 if pgrep -f "celery.*beat" > /dev/null; then
@@ -165,10 +187,11 @@ echo -e "${GREEN}  All services started successfully!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 echo -e "${BLUE}Service Status:${NC}"
-echo -e "  ${GREEN}✓${NC} RabbitMQ:      http://localhost:15672 (guest/guest)"
-echo -e "  ${GREEN}✓${NC} FastAPI:        http://localhost:8000"
-echo -e "  ${GREEN}✓${NC} Celery Worker:  Running"
-echo -e "  ${GREEN}✓${NC} Celery Beat:    Running"
+echo -e "  ${GREEN}✓${NC} MongoDB:        mongodb://localhost:27017"
+echo -e "  ${GREEN}✓${NC} RabbitMQ:       http://localhost:15672 (guest/guest)"
+echo -e "  ${GREEN}✓${NC} FastAPI:         http://localhost:8000"
+echo -e "  ${GREEN}✓${NC} Celery Worker:   Running"
+echo -e "  ${GREEN}✓${NC} Celery Beat:     Running"
 echo ""
 echo -e "${BLUE}Logs Location:${NC}"
 echo -e "  API Server:     $LOGS_DIR/api.log"

@@ -28,7 +28,11 @@ ATOMIC_DEBOUNCE_SECONDS = 5  # Minimum time between atomic processing per user
 # TSFM Model Configuration (Time Series Foundation Model)
 # Zero-shot activity recognition with 87+ activity labels
 # =============================================================================
-USE_TSFM_MODEL = True  # Set to False to use legacy IMU transformer
+# TSFM disabled until checkpoint is downloaded (~400MB).
+# The legacy IMU transformer handles HAR inference reliably.
+# To enable TSFM: download best.pt to src/celery_app/services/tsfm_model/ckpts/
+#   and set USE_TSFM_MODEL = True
+USE_TSFM_MODEL = False
 TSFM_MIN_SAMPLES = 10  # Minimum IMU samples required for TSFM inference
 
 # Legacy IMU HAR model (Transformer encoder); set to None to use mock
@@ -83,11 +87,9 @@ CELERY_BEAT_SCHEDULE = {
 # =============================================================================
 
 # Minimum data required before generating a summary log
-# TEMPORARILY REDUCED FOR TESTING - restore to original values after testing
-MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG = 1  # At least 1 atomic records (was: 60)
-MIN_UNIQUE_LABELS_FOR_LOG = 1  # At least 1 unique activity type (was: 3)
+MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG = 60  # At least 60 atomic records
+MIN_UNIQUE_LABELS_FOR_LOG = 3  # At least 3 unique activity types
 
 # Per-user hourly timer settings
-# TEMPORARILY REDUCED FOR TESTING - restore to original values after testing
-MIN_DATA_COLLECTION_HOURS = 0.05  # ~3 minutes for testing (was: 1 hour)
-MIN_HOURS_BETWEEN_SUMMARIES = 0.03  # ~2 minutes for testing (was: 1 hour)
+MIN_DATA_COLLECTION_HOURS = 1.0  # 1 hour of data collection minimum
+MIN_HOURS_BETWEEN_SUMMARIES = 1.0  # 1 hour between summaries

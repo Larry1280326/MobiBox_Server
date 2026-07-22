@@ -15,6 +15,22 @@ echo -e "${BLUE}========================================${NC}"
 echo ""
 
 # =========================================
+# Check MongoDB
+# =========================================
+echo -e "${BLUE}MongoDB:${NC}"
+if docker ps | grep -q mobibox-mongo; then
+    echo -e "  ${GREEN}✓${NC} Running (Docker container)"
+    echo -e "    URL: mongodb://localhost:27017"
+else
+    if docker ps -a | grep -q mobibox-mongo; then
+        echo -e "  ${YELLOW}⚠${NC} Stopped (container exists)"
+    else
+        echo -e "  ${RED}✗${NC} Not found"
+    fi
+fi
+echo ""
+
+# =========================================
 # Check RabbitMQ
 # =========================================
 echo -e "${BLUE}RabbitMQ:${NC}"
@@ -105,7 +121,8 @@ echo ""
 # Check Ports
 # =========================================
 echo -e "${BLUE}Port Usage:${NC}"
-echo -e "  5672  (RabbitMQ):    $(check_port 5672 && echo -e "${GREEN}In Use${NC}" || echo -e "${RED}Free${NC}")"
+echo -e "  27017 (MongoDB):    $(check_port 27017 && echo -e "${GREEN}In Use${NC}" || echo -e "${RED}Free${NC}")"
+echo -e "  5672  (RabbitMQ):   $(check_port 5672 && echo -e "${GREEN}In Use${NC}" || echo -e "${RED}Free${NC}")"
 echo -e "  8000  (FastAPI):     $(check_port 8000 && echo -e "${GREEN}In Use${NC}" || echo -e "${RED}Free${NC}")"
 echo ""
 

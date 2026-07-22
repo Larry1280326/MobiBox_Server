@@ -1,6 +1,6 @@
 """API routes for user registration."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from src.register.schemas import RegisterRequest
 from src.register.service import register_user as register_user_service
@@ -10,12 +10,8 @@ router = APIRouter(tags=["register"])
 
 @router.post("/register")
 async def register(request: RegisterRequest):
-    """Register a new user. Writes to the users collection."""
-    try:
-        return await register_user_service(request)
-    except Exception as e:
-        error_msg = str(e).lower()
-        # Handle unique constraint violation (duplicate name)
-        if "unique" in error_msg or "duplicate" in error_msg or "e11000" in error_msg:
-            raise HTTPException(status_code=409, detail="User name already exists")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Register a new user. Writes to the users collection.
+
+    DuplicateKeyError is caught by the global exception handler → 409.
+    """
+    return await register_user_service(request)

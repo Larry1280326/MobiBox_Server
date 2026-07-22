@@ -1,6 +1,6 @@
 """API routes for query endpoints."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from src.query.schemas import (
     SummaryLogRequest,
@@ -46,31 +46,28 @@ async def fetch_summary_log(request: SummaryLogRequest):
     - If there's a newer log, returns has_new_log=True with the new log data
     - If last_log_id is not provided, returns the latest log (has_new_log=True)
     """
-    try:
-        record, has_new_log = await get_summary_logs(
-            user=request.user,
-            log_type=request.log_type,
-            last_log_id=request.last_log_id,
-        )
+    record, has_new_log = await get_summary_logs(
+        user=request.user,
+        log_type=request.log_type,
+        last_log_id=request.last_log_id,
+    )
 
-        if record is None:
-            return SummaryLogResponse(status="success", data=None, has_new_log=has_new_log)
+    if record is None:
+        return SummaryLogResponse(status="success", data=None, has_new_log=has_new_log)
 
-        formatted = format_summary_log(record)
-        # Extract date string for daily logs (frontend expects it at top level)
-        date_str = None
-        if request.log_type == "daily" and record.get("start_timestamp"):
-            start_ts = record.get("start_timestamp")
-            if hasattr(start_ts, "strftime"):
-                date_str = start_ts.strftime("%Y-%m-%d")
-        return SummaryLogResponse(
-            status="success",
-            data=SummaryLogItem(**formatted),
-            has_new_log=has_new_log,
-            date=date_str,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    formatted = format_summary_log(record)
+    # Extract date string for daily logs (frontend expects it at top level)
+    date_str = None
+    if request.log_type == "daily" and record.get("start_timestamp"):
+        start_ts = record.get("start_timestamp")
+        if hasattr(start_ts, "strftime"):
+            date_str = start_ts.strftime("%Y-%m-%d")
+    return SummaryLogResponse(
+        status="success",
+        data=SummaryLogItem(**formatted),
+        has_new_log=has_new_log,
+        date=date_str,
+    )
 
 
 @router.post("/get_intervention", response_model=InterventionResponse)
@@ -81,19 +78,16 @@ async def fetch_intervention(request: InterventionRequest):
     Given a user ID, returns the most recent intervention content,
     window timestamps, and generation timestamp.
     """
-    try:
-        record = await get_interventions(user=request.user)
+    record = await get_interventions(user=request.user)
 
-        if record is None:
-            return InterventionResponse(status="success", data=None)
+    if record is None:
+        return InterventionResponse(status="success", data=None)
 
-        formatted = format_intervention(record)
-        return InterventionResponse(
-            status="success",
-            data=InterventionItem(**formatted),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    formatted = format_intervention(record)
+    return InterventionResponse(
+        status="success",
+        data=InterventionItem(**formatted),
+    )
 
 
 @router.post("/send_intervention_feedback", response_model=InterventionFeedbackResponse)
@@ -103,21 +97,18 @@ async def send_intervention_feedback(request: InterventionFeedbackRequest):
 
     Receives user feedback for a specific intervention and stores it in the database.
     """
-    try:
-        await submit_intervention_feedback(
-            user=request.user,
-            intervention_id=request.intervention_id,
-            feedback=request.feedback,
-            mc1=request.mc1,
-            mc2=request.mc2,
-            mc3=request.mc3,
-            mc4=request.mc4,
-            mc5=request.mc5,
-            mc6=request.mc6,
-        )
-        return InterventionFeedbackResponse()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    await submit_intervention_feedback(
+        user=request.user,
+        intervention_id=request.intervention_id,
+        feedback=request.feedback,
+        mc1=request.mc1,
+        mc2=request.mc2,
+        mc3=request.mc3,
+        mc4=request.mc4,
+        mc5=request.mc5,
+        mc6=request.mc6,
+    )
+    return InterventionFeedbackResponse()
 
 
 @router.post("/send_log_feedback", response_model=SummaryLogFeedbackResponse)
@@ -128,20 +119,17 @@ async def send_log_feedback(request: SummaryLogFeedbackRequest):
     Receives user feedback for a specific summary log and stores it in the database.
     Supports both simple text feedback and structured feedback with Q1-Q2.
     """
-    try:
-        await submit_summary_log_feedback(
-            user=request.user,
-            summary_logs_id=request.summary_logs_id,
-            feedback=request.feedback,
-            q1=request.q1,
-            q2=request.q2,
-            q2_preference=request.q2_preference,
-            ground_truth=request.ground_truth,
-            suggestions=request.suggestions,
-        )
-        return SummaryLogFeedbackResponse()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    await submit_summary_log_feedback(
+        user=request.user,
+        summary_logs_id=request.summary_logs_id,
+        feedback=request.feedback,
+        q1=request.q1,
+        q2=request.q2,
+        q2_preference=request.q2_preference,
+        ground_truth=request.ground_truth,
+        suggestions=request.suggestions,
+    )
+    return SummaryLogFeedbackResponse()
 
 
 @router.post("/get_compressed_atomic_activities", response_model=AtomicActivitiesResponse)
@@ -163,24 +151,21 @@ async def fetch_atomic_activities(request: AtomicActivitiesRequest):
     Returns:
         AtomicActivitiesResponse with grouped activity data
     """
-    try:
-        data = await get_atomic_activities(
-            user=request.user,
-            duration=request.duration,
-        )
+    data = await get_atomic_activities(
+        user=request.user,
+        duration=request.duration,
+    )
 
-        # Extract timestamps from the data dict (pop separate from AtomicActivitiesData)
-        start_ts = data.pop("start_timestamp", None)
-        end_ts = data.pop("end_timestamp", None)
+    # Extract timestamps from the data dict (pop separate from AtomicActivitiesData)
+    start_ts = data.pop("start_timestamp", None)
+    end_ts = data.pop("end_timestamp", None)
 
-        return AtomicActivitiesResponse(
-            status="success",
-            data=AtomicActivitiesData(**data),
-            start_timestamp=start_ts,
-            end_timestamp=end_ts,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return AtomicActivitiesResponse(
+        status="success",
+        data=AtomicActivitiesData(**data),
+        start_timestamp=start_ts,
+        end_timestamp=end_ts,
+    )
 
 
 @router.post("/get_encoded_atomic_activities", response_model=EncodedAtomicActivitiesResponse)
@@ -209,24 +194,21 @@ async def fetch_encoded_atomic_activities(request: AtomicActivitiesRequest):
     Returns:
         EncodedAtomicActivitiesResponse with Level-1 and Level-2 encoded data
     """
-    try:
-        data = await get_atomic_activities_encoded(
-            user=request.user,
-            duration=request.duration,
-        )
+    data = await get_atomic_activities_encoded(
+        user=request.user,
+        duration=request.duration,
+    )
 
-        # Convert dict to Pydantic model
-        window_meta = data.get("window_meta", {"duration_min": 0, "token_minutes": 1.0})
-        level2_view = data.get("level2_compact_view", {})
-        level1_view = data.get("level1_temporal_view", {})
+    # Convert dict to Pydantic model
+    window_meta = data.get("window_meta", {"duration_min": 0, "token_minutes": 1.0})
+    level2_view = data.get("level2_compact_view", {})
+    level1_view = data.get("level1_temporal_view", {})
 
-        return EncodedAtomicActivitiesResponse(
-            status="success",
-            data=EncodedAtomicActivitiesData(
-                window_meta=window_meta,
-                level2_compact_view=level2_view,
-                level1_temporal_view=level1_view,
-            ),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return EncodedAtomicActivitiesResponse(
+        status="success",
+        data=EncodedAtomicActivitiesData(
+            window_meta=window_meta,
+            level2_compact_view=level2_view,
+            level1_temporal_view=level1_view,
+        ),
+    )

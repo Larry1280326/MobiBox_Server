@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # MongoDB
     mongodb_url: str = "mongodb://localhost:27017"
     mongodb_db_name: str = "mobibox"
+    mongodb_server_selection_timeout_ms: int = 5000
+    mongodb_connect_timeout_ms: int = 5000
+    mongodb_max_pool_size: int = 20
+    mongodb_min_pool_size: int = 0
 
     # RabbitMQ / Celery
     rabbitmq_url: str = "amqp://guest:guest@localhost:5672//"

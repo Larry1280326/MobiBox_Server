@@ -1,6 +1,6 @@
 # MobiBox Backend
 
-A FastAPI-based backend server for MobiBox with Supabase integration, Celery task processing, and LLM-powered health interventions.
+A FastAPI-based backend server for MobiBox with MongoDB integration, Celery task processing, and LLM-powered health interventions.
 
 ## Quick Start
 
@@ -81,7 +81,7 @@ celery -A src.celery_app.celery_app beat --loglevel=info
 | [Conda](https://docs.conda.io/en/latest/miniconda.html) | Python environment management |
 | Python 3.11 | Runtime environment |
 | [Docker](https://www.docker.com/) | Running RabbitMQ |
-| [Supabase](https://supabase.com/) | Database backend |
+| [MongoDB](https://www.mongodb.com/) | Database backend (local or Atlas) |
 | [OpenRouter](https://openrouter.ai/) API | LLM integration for interventions |
 
 ### Configuration
@@ -92,16 +92,14 @@ Copy `.env.example` to `.env` and configure the following:
 cp .env.example .env
 ```
 
-#### Supabase Configuration
+#### MongoDB Configuration
 
-1. Create a Supabase project at https://supabase.com/
-2. Get your project URL, anon key, and service role key from **Project Settings → API**
-3. Update `.env`:
+1. Install and start MongoDB locally, or create a cluster at https://www.mongodb.com/atlas
+2. Update `.env` with your MongoDB connection:
 
 ```env
-SUPABASE_URL=https://your-project-id.supabase.co
-SUPABASE_ANON_KEY=your-anon-key-here
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here  # Optional, for admin operations
+MONGODB_URL=mongodb://localhost:27017
+MONGODB_DB_NAME=mobibox
 ```
 
 #### OpenRouter LLM Configuration (for LLM features)
@@ -167,7 +165,7 @@ conda create -n Mobibox_backend python=3.11
 conda activate Mobibox_backend
 
 # Install dependencies
-pip install fastapi "uvicorn[standard]" pydantic pydantic-settings sqlalchemy alembic asyncpg psycopg2-binary aiomysql aiosqlite supabase "python-jose[cryptography]" "passlib[bcrypt]" python-multipart httpx aiohttp pytest pytest-asyncio python-dotenv pyyaml orjson black isort flake8 mypy
+pip install fastapi "uvicorn[standard]" pydantic pydantic-settings motor pymongo "python-jose[cryptography]" "passlib[bcrypt]" python-multipart httpx aiohttp pytest pytest-asyncio python-dotenv pyyaml orjson black isort flake8 mypy celery pyarrow torch numpy sentence-transformers
 ```
 
 ### Verify Installation
@@ -182,7 +180,7 @@ python --version
 # Verify FastAPI is installed
 python -c "import fastapi; print(f'FastAPI version: {fastapi.__version__}')"
 
-# Test Supabase connection
+# Test MongoDB connection
 python -c "from src.config import get_settings; print('Settings loaded:', get_settings().app_name)"
 ```
 
@@ -217,8 +215,8 @@ conda env remove -n Mobibox_backend
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   FastAPI       │     │   RabbitMQ      │     │   Supabase      │
-│   (Port 8000)   │────▶│   (Port 5672)   │     │   (Cloud)       │
+│   FastAPI       │     │   RabbitMQ      │     │   MongoDB       │
+│   (Port 8000)   │────▶│   (Port 5672)   │     │   (Port 27017)  │
 │                 │     │                 │     │                 │
 │  REST API       │     │  Message Queue  │     │  Database       │
 └────────┬────────┘     └────────┬────────┘     └────────┬────────┘
@@ -300,10 +298,10 @@ celery -A src.celery_app.celery_app beat --loglevel=info
 **Scheduled Tasks:**
 | Task | Schedule | Description |
 |------|----------|-------------|
-| `generate_hourly_interventions` | Every hour | Generate health interventions |
-| `generate_hourly_summary` | Every hour | Generate hourly activity summary |
+| `generate_hourly_interventions` | Every 20 min | Generate health interventions |
+| `generate_hourly_summary` | Every 20 min | Generate hourly activity summary |
 | `generate_daily_summary` | Daily at midnight | Generate daily activity summary |
-| `archive_data_periodic` | Daily at 3 AM | Archive old data to storage |
+| `archive_data_periodic` | Daily at 3 AM | Archive old data to Parquet |
 
 ### Running Multiple Services Together
 
@@ -365,8 +363,8 @@ pkill -f "uvicorn\|celery"
 curl http://localhost:8000/health
 # Expected: {"status": "healthy"}
 
-# Check Supabase connection
-curl http://localhost:8000/supabase-test
+# Check MongoDB connection
+curl http://localhost:8000/mongodb-test
 
 # Check Celery worker is running
 celery -A src.celery_app.celery_app inspect active
@@ -383,18 +381,17 @@ celery -A src.celery_app.celery_app inspect registered
 | `Connection refused` to RabbitMQ | Ensure RabbitMQ is running: `docker ps \| grep rabbitmq` |
 | Celery tasks not executing | Check worker logs for errors, verify environment variables |
 | LLM errors | Verify `OPENROUTER_API_KEY` in `.env` |
-| Supabase connection errors | Verify `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.env` |
+| MongoDB connection errors | Verify `MONGODB_URL` in `.env` and ensure MongoDB is running: `mongosh --eval "db.runCommand({ping:1})"` |
 | Port 8000 already in use | Kill existing process: `lsof -i :8000` then `kill -9 <PID>` |
-| Integration tests skipped | Set `OPENROUTER_API_KEY` or `SUPABASE_SERVICE_ROLE_KEY` in `.env` |
-| Storage upload tests failing | Ensure storage bucket `mobibox-archive` exists in Supabase |
+| Integration tests skipped | Set `OPENROUTER_API_KEY` in `.env` |
 
 ## API Endpoints
 
 ### Health Check
 - `GET /health` - Returns `{"status": "healthy"}`
 
-### Supabase Connection Test
-- `GET /supabase-test` - Tests Supabase connection
+### MongoDB Connection Test
+- `GET /mongodb-test` - Tests MongoDB connection
 
 ### User Registration
 - `POST /register` - Register a new user
@@ -535,7 +532,7 @@ pytest --cov=src --cov-report=html
 | `test_celery_tasks.py` | Celery task tests |
 | `test_archive_service.py` | Archival service unit tests (mocked) |
 | `test_archive_service_integration.py` | Archival integration tests (real DB) |
-| `test_archive_storage_integration.py` | Storage upload tests (real Supabase) |
+| `test_archive_storage_integration.py` | Local archival integration tests |
 | `test_query.py` | Query endpoint tests |
 | `test_tsfm.py` | TSFM model tests |
 | `test_intervention_pipeline_integration.py` | Intervention pipeline tests |
@@ -557,7 +554,7 @@ pytest -v -m integration
 
 # Requires:
 # - OPENROUTER_API_KEY in .env (for LLM tests)
-# - SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (for storage tests)
+# - MONGODB_URL in .env (for DB tests)
 ```
 
 ### Test Fixtures
@@ -566,8 +563,8 @@ The `conftest.py` file provides common fixtures:
 
 | Fixture | Description |
 |---------|-------------|
-| `mock_supabase_client` | Mocked Supabase client for unit tests |
-| `client` | FastAPI test client with mocked Supabase |
+| `mock_mongo_client` | Mocked MongoDB client for unit tests |
+| `client` | FastAPI test client with mocked MongoDB |
 | `mock_rate_limiter` | Mocked rate limiter for LLM tests |
 | `mock_llm_settings` | Mocked LLM settings for unit tests |
 | `mock_chat_openai` | Mocked ChatOpenAI for LLM tests |
@@ -585,13 +582,13 @@ pytest src/test/test_llm_integration.py -v -m integration
 
 #### Archival Tests
 ```bash
-# Unit tests (mocked, no Supabase needed)
+# Unit tests (mocked, no MongoDB needed)
 pytest src/test/test_archive_service.py -v
 
-# Integration tests (requires Supabase credentials)
+# Integration tests (requires MongoDB)
 pytest src/test/test_archive_service_integration.py -v -m integration
 
-# Storage upload tests (uploads to /tests folder in bucket)
+# Local archival tests
 pytest src/test/test_archive_storage_integration.py -v -m integration
 ```
 
@@ -603,35 +600,12 @@ Integration tests require real API credentials. Set these in your `.env`:
 # LLM Integration Tests
 OPENROUTER_API_KEY=sk-or-v1-...
 
-# Supabase Integration Tests
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIs...
+# MongoDB Integration Tests (uses MONGODB_URL from .env)
+MONGODB_URL=mongodb://localhost:27017
+MONGODB_DB_NAME=mobibox
 ```
 
 Integration tests are automatically skipped if credentials are missing.
-
-### Viewing Test Data in Supabase
-
-After running storage integration tests, you can view uploaded test files:
-
-1. Go to **Supabase Dashboard** → **Storage**
-2. Navigate to `mobibox-archive` bucket
-3. Open the `tests` folder to see uploaded Parquet files:
-
-```
-tests/
-├── imu/
-│   └── 2026/03/
-│       └── test-2026-03-08-*.parquet
-├── har/
-│   └── 2026/03/
-│       └── test-2026-03-08-*.parquet
-├── atomic_activities/
-│   └── 2026/03/
-│       └── test-2026-03-08-*.parquet
-└── verify/
-    └── test-*.parquet
-```
 
 ### Test Output Examples
 
@@ -685,18 +659,13 @@ MobiBox_server/
 │   ├── api.log              # FastAPI logs
 │   ├── celery_worker.log    # Celery worker logs
 │   └── celery_beat.log      # Celery beat logs
-├── migrations/               # Database migrations
-│   ├── 002_add_missing_features_tables.sql
-│   ├── 003_database_improvements.sql
-│   ├── 004_add_log_feedback_fields.sql
-│   └── 005_storage_archival.sql
 ├── docs/                     # Documentation
 │   └── TSFM_INTEGRATION.md  # TSFM model documentation
 ├── src/
 │   ├── __init__.py
 │   ├── main.py              # FastAPI application entry point
 │   ├── config.py            # Application configuration
-│   ├── database.py          # Supabase client initialization
+│   ├── database.py          # MongoDB client initialization (Motor + PyMongo)
 │   ├── register/            # User registration module
 │   │   ├── __init__.py
 │   │   ├── constants.py
@@ -782,7 +751,8 @@ MobiBox_server/
 | uvicorn | ASGI server |
 | pydantic | Data validation using Python type hints |
 | pydantic-settings | Settings management |
-| supabase | Supabase Python client |
+| motor | Async MongoDB driver |
+| pymongo | Sync MongoDB driver (for PyTorch Dataset) |
 | celery | Distributed task queue |
 | celery-beat | Celery scheduler for periodic tasks |
 | langchain-openai | LLM integration via OpenRouter |
@@ -800,90 +770,89 @@ MobiBox_server/
 
 ## Database Schema
 
-The application connects to Supabase and uses the following tables:
+The application connects to MongoDB and uses the following collections:
 
-### users table
-- `name` (text, primary key) - Unique user identifier
+### users collection
+- `_id` (string, primary key) - Unique user identifier (same as `name`)
+- `name` (string) - User display name
 
-### uploads table
-- `user` (character varying) - User identifier (foreign key to user.name)
-- `timestamp` (timestamp with time zone) - Record timestamp, defaults to now()
-- `volume` (smallint) - Audio volume level (0-100)
-- `screen_on_ratio` (real) - Screen on time ratio (0.0-1.0)
-- `wifi_connected` (boolean) - WiFi connection status
-- `wifi_ssid` (character varying) - WiFi network SSID
-- `network_traffic` (real) - Total network traffic in bytes
-- `Rx_traffic` (real) - Received traffic in bytes
-- `Tx_traffic` (real) - Transmitted traffic in bytes
-- `stepcount_sensor` (smallint) - Step count
-- `gpsLat` (double precision) - GPS latitude
-- `gpsLon` (double precision) - GPS longitude
-- `battery` (smallint) - Battery percentage (0-100)
-- `current_app` (character varying) - Current foreground app package name
-- `bluetooth_devices` (character varying[]) - Array of Bluetooth device names
-- `address` (character varying) - Physical address
-- `poi` (character varying[]) - Array of points of interest
-- `nearbyBluetoothCount` (smallint) - Count of nearby Bluetooth devices
-- `topBluetoothDevices` (character varying[]) - Array of top Bluetooth device names
+### uploads collection
+- `user` (string) - User identifier (indexed)
+- `timestamp` (datetime) - Record timestamp
+- `volume` (int) - Audio volume level (0-100)
+- `screen_on_ratio` (float) - Screen on time ratio (0.0-1.0)
+- `wifi_connected` (bool) - WiFi connection status
+- `wifi_ssid` (string) - WiFi network SSID
+- `network_traffic` (float) - Total network traffic in bytes
+- `Rx_traffic` (float) - Received traffic in bytes
+- `Tx_traffic` (float) - Transmitted traffic in bytes
+- `stepcount_sensor` (int) - Step count
+- `gpsLat` (float) - GPS latitude
+- `gpsLon` (float) - GPS longitude
+- `battery` (int) - Battery percentage (0-100)
+- `current_app` (string) - Current foreground app package name
+- `bluetooth_devices` (array of strings) - Array of Bluetooth device names
+- `address` (string) - Physical address
+- `poi` (array of strings) - Array of points of interest
+- `nearbyBluetoothCount` (int) - Count of nearby Bluetooth devices
+- `topBluetoothDevices` (array of strings) - Array of top Bluetooth device names
 
-### imu table
-- `user` (text) - User identifier
-- `timestamp` (timestamptz) - Record timestamp
+### imu collection
+- `user` (string) - User identifier
+- `timestamp` (datetime) - Record timestamp
 - `acc_X`, `acc_Y`, `acc_Z` (float) - Accelerometer readings
 - `gyro_X`, `gyro_Y`, `gyro_Z` (float) - Gyroscope readings
 - `mag_X`, `mag_Y`, `mag_Z` (float) - Magnetometer readings
 
-### har table
-- `id` (bigint, auto-generated) - Primary key
-- `timestamp` (timestamptz) - Record timestamp
-- `user` (varchar) - User identifier
-- `har_label` (enum) - Activity label (walking, running, sitting, etc.)
-- `confidence` (real, new) - Confidence score (0-1)
-- `source` (varchar, new) - Source: 'tsfm_model', 'imu_model', 'mock_har', 'insufficient_data'
+### har collection
+- `user` (string) - User identifier
+- `timestamp` (datetime) - Record timestamp
+- `har_label` (string) - Activity label (walking, running, sitting, etc.)
+- `confidence` (float) - Confidence score (0-1)
+- `source` (string) - Source: 'tsfm_model', 'imu_model', 'mock_har', 'insufficient_data'
 
-### atomic_activities table
-- `user` (text) - User identifier
-- `timestamp` (timestamptz) - Record timestamp
-- `har_label` (text) - HAR activity label
-- `app_category` (text) - App usage category
-- `step_label` (text) - Step activity label
-- `phone_usage` (text) - Phone usage pattern
-- `social_label` (text) - Social context label
-- `movement_label` (text) - Movement pattern label
-- `location_label` (text) - Location context
+### atomic_activities collection
+- `user` (string) - User identifier
+- `timestamp` (datetime) - Record timestamp
+- `har_label` (string) - HAR activity label
+- `app_category` (string) - App usage category
+- `step_label` (string) - Step activity label
+- `phone_usage` (string) - Phone usage pattern
+- `social_label` (string) - Social context label
+- `movement_label` (string) - Movement pattern label
+- `location_label` (string) - Location context
 
-### interventions table
-- `user` (text) - User identifier
-- `intervention_type` (text) - Type of intervention
-- `message` (text) - Intervention message
-- `priority` (text) - Priority (low/medium/high)
-- `category` (text) - Category
-- `timestamp` (timestamptz) - Record timestamp
+### interventions collection
+- `user` (string) - User identifier
+- `intervention_type` (string) - Type of intervention
+- `message` (string) - Intervention message
+- `priority` (string) - Priority (low/medium/high)
+- `category` (string) - Category
+- `timestamp` (datetime) - Record timestamp
 
-### summary_logs table
-- `user` (text) - User identifier
-- `log_type` (text) - hourly or daily
-- `title` (text) - Summary title
-- `summary` (text) - Summary narrative
-- `highlights` (jsonb) - Key highlights
-- `recommendations` (jsonb) - Recommendations
-- `timestamp` (timestamptz) - Record timestamp
+### summary_logs collection
+- `user` (string) - User identifier
+- `log_type` (string) - hourly or daily
+- `title` (string) - Summary title
+- `summary` (string) - Summary narrative
+- `highlights` (object) - Key highlights
+- `recommendations` (object) - Recommendations
+- `timestamp` (datetime) - Record timestamp
 
-### app_categories table (new)
-- `id` (serial, primary key) - Auto-increment ID
-- `app_name` (text, unique) - App package name
-- `category` (text) - Category classification
-- `source` (text) - 'lookup' (predefined) or 'llm' (learned)
-- `created_at` (timestamptz) - Record timestamp
+### app_categories collection
+- `app_name` (string, unique index) - App package name
+- `category` (string) - Category classification
+- `source` (string) - 'lookup' (predefined) or 'llm' (learned)
+- `created_at` (datetime) - Record timestamp
 
-### user_processing_state table (new)
-- `user` (text, primary key) - User identifier
-- `last_har_timestamp` (timestamptz) - Last HAR processing time
-- `last_atomic_timestamp` (timestamptz) - Last atomic activity time
-- `last_upload_timestamp` (timestamptz) - Last data upload time
-- `data_collection_start` (timestamptz) - Data collection start time
-- `last_summary_generated` (timestamptz) - Last summary generation time
-- `updated_at` (timestamptz) - Record update time
+### user_processing_state collection
+- `_id` (string, primary key) - User identifier
+- `last_har_timestamp` (datetime) - Last HAR processing time
+- `last_atomic_timestamp` (datetime) - Last atomic activity time
+- `last_upload_timestamp` (datetime) - Last data upload time
+- `data_collection_start` (datetime) - Data collection start time
+- `last_summary_generated` (datetime) - Last summary generation time
+- `updated_at` (datetime) - Record update time
 
 ## Celery Tasks
 
@@ -895,8 +864,8 @@ The system uses Celery for asynchronous processing of sensor data and generating
 |----------|---------|-------------|
 | **HAR Processing** | IMU data upload | Classify human activity from sensor data |
 | **Atomic Activities** | Document upload | Generate 7-dimensional activity labels |
-| **Interventions** | Scheduled (hourly) | LLM-generated health suggestions |
-| **Summaries** | Scheduled (hourly/daily) | Activity summary logs |
+| **Interventions** | Scheduled (every 20 min) | LLM-generated health suggestions |
+| **Summaries** | Scheduled (every 20 min + daily) | Activity summary logs |
 
 ### Quick Reference
 
@@ -1212,59 +1181,11 @@ BAIDU_MAPS_ENABLED=true
 
 ---
 
-## Database Migration
+## Database Indexes (Automatic)
 
-Run migrations in order:
+Indexes are created automatically at application startup by `database_indexes.py`. No manual migration steps are needed — all indexes (including TTL-based expiration) are ensured idempotently when the server starts.
 
-```bash
-# Migration 002: Add missing features tables
-psql -f migrations/002_add_missing_features_tables.sql
-
-# Migration 003: Database improvements (indexes, constraints, triggers)
-psql -f migrations/003_database_improvements.sql
-
-# Migration 004: Add log feedback fields
-psql -f migrations/004_add_log_feedback_fields.sql
-
-# Migration 005: Storage archival setup
-psql -f migrations/005_storage_archival.sql
-```
-
-### Migration 002: New Tables
-
-Creates tables for app categories cache and user processing state:
-
-```sql
--- App categories cache
-CREATE TABLE IF NOT EXISTS app_categories (
-    id SERIAL PRIMARY KEY,
-    app_name TEXT NOT NULL UNIQUE,
-    category TEXT NOT NULL,
-    source TEXT DEFAULT 'llm',
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- User processing state
-CREATE TABLE IF NOT EXISTS user_processing_state (
-    "user" TEXT PRIMARY KEY,
-    last_har_timestamp TIMESTAMPTZ,
-    last_atomic_timestamp TIMESTAMPTZ,
-    last_upload_timestamp TIMESTAMPTZ,
-    data_collection_start TIMESTAMPTZ,
-    last_summary_generated TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-### Migration 003: Performance Improvements
-
-Adds indexes, constraints, and triggers for better performance:
-
-- **Foreign Keys**: Links `user_processing_state.user` to `user.name`
-- **Indexes**: Optimizes common queries on `atomic_activities`, `har`, `summary_logs`
-- **Triggers**: Auto-updates `updated_at` timestamps
-- **Constraints**: Validates `log_type`, `source` values
-- **Views**: `v_user_recent_activity`, `v_users_ready_for_summary`
+See the [Database Indexes](#database-indexes) section above for the complete list.
 
 ---
 
@@ -1338,45 +1259,35 @@ Per-user processing timestamps for incremental processing.
 | `last_summary_generated` | timestamptz | Last summary generation time |
 | `updated_at` | timestamptz | Auto-updated timestamp |
 
-### Indexes
+## Database Indexes
+
+Indexes are created automatically at application startup via `database_indexes.py` (idempotent). This replaces the old SQL migration system.
 
 Key indexes for performance:
 
-| Table | Index | Purpose |
-|-------|-------|---------|
-| `atomic_activities` | `(user, timestamp DESC)` | User activity queries |
-| `har` | `(user, timestamp DESC)` | HAR label queries |
-| `summary_logs` | `(user, log_type, timestamp DESC)` | Summary polling |
-| `imu` | `(user, timestamp DESC)` | IMU data queries |
-| `app_categories` | `(app_name)` | App category lookup |
+| Collection | Index | Purpose |
+|-----------|-------|---------|
+| `atomic_activities` | `(user, timestamp)` | User activity queries |
+| `har` | `(user, timestamp)` | HAR label queries |
+| `summary_logs` | `(user, log_type, timestamp)` | Summary polling |
+| `imu` | `(user, timestamp)` | IMU data queries |
+| `app_categories` | `(app_name)` | App category lookup (unique) |
+| `users` | `(_id)` | User lookup (unique) |
+| `user_processing_state` | `(_id)` | State lookup (unique) |
 
-### Views
-
-#### `v_user_recent_activity`
-Recent activity summary per user:
-```sql
-SELECT user, MAX(timestamp) as last_activity,
-       COUNT(*) as activity_count,
-       MODE() WITHIN GROUP (ORDER BY har_label) as dominant_activity
-FROM atomic_activities GROUP BY user;
-```
-
-#### `v_users_ready_for_summary`
-Users ready for summary generation (1+ hour of data, 1+ hour since last summary):
-```sql
-SELECT user, data_collection_start, last_summary_generated,
-       EXTRACT(EPOCH FROM (NOW() - data_collection_start))/3600 as hours_since_start
-FROM user_processing_state
-WHERE data_collection_start IS NOT NULL
-  AND hours_since_start >= 1
-  AND (last_summary_generated IS NULL OR hours_since_last_summary >= 1);
-```
-
----
+TTL (Time-To-Live) indexes automatically expire old data:
+| Collection | TTL | Retention |
+|-----------|-----|-----------|
+| `imu` | 7 days | Highest volume sensor data |
+| `har` | 30 days | Derived from IMU |
+| `atomic_activities` | 30 days | Activity summaries |
+| `uploads` | 30 days | Document uploads |
+| `summary_logs` | 90 days | Important user summaries |
+| `interventions` | 90 days | Health interventions |
 
 ## Data Archival System
 
-The system automatically archives old data to Supabase Storage to reduce database size and costs. Archived data is stored in **Parquet format with Snappy compression**, achieving **10-100x compression** compared to CSV.
+The system automatically archives old data to local Parquet files to reduce database size. Archived data is stored in **Parquet format with Snappy compression**, achieving **10-100x compression** compared to CSV.
 
 ### Overview
 
@@ -1384,26 +1295,25 @@ The system automatically archives old data to Supabase Storage to reduce databas
 |------------|---------|
 | Archive Service | Exports old records to Parquet files |
 | Celery Beat | Schedules daily archival at 3 AM |
-| Storage Bucket | Holds archived Parquet files |
+| Local Filesystem | Holds archived Parquet files |
 | Archival Logs | Audit trail of all archival operations |
 
 ### Storage Format
 
-Archives are stored as Parquet files with Snappy compression:
+Archives are stored locally as Parquet files with Snappy compression:
 
 ```
-mobibox-archive/
-└── archives/
-    ├── imu/
-    │   └── 2026/
-    │       └── 03/
-    │           └── 2026-03-01.parquet
-    ├── har/
-    │   └── 2026/
-    │       └── 03/
-    │           └── 2026-03-01.parquet
-    └── atomic_activities/
-        └── ...
+./archives/
+├── imu/
+│   └── 2026/
+│       └── 03/
+│           └── 2026-03-01.parquet
+├── har/
+│   └── 2026/
+│       └── 03/
+│           └── 2026-03-01.parquet
+└── atomic_activities/
+    └── ...
 ```
 
 **Benefits of Parquet:**
@@ -1412,82 +1322,15 @@ mobibox-archive/
 - **Query optimization** (built-in statistics)
 - **Industry standard** for data lakes and analytics
 
-**Compression Efficiency (from tests):**
-- 1,000 IMU records: ~31KB Parquet vs ~79KB CSV = **2.57x compression**
-- Larger datasets achieve even better ratios (10-100x for repetitive data)
-
-### Retention Policy
-
-| Table | Retention | Reason |
-|-------|------------|--------|
-| `imu` | 7 days | Highest volume sensor data |
-| `har` | 30 days | Derived from IMU, lower volume |
-| `atomic_activities` | 30 days | Activity summaries |
-| `uploads` | 30 days | Document uploads |
-| `summary_logs` | 90 days | Important user summaries |
-| `interventions` | 90 days | Health interventions |
-
 ### Configuration
 
 Add to `.env`:
 
 ```env
-# Storage bucket name (create in Supabase dashboard)
-STORAGE_BUCKET=mobibox-archive
-
-# Retention days (optional, defaults shown)
-RETENTION_IMU_DAYS=7
-RETENTION_HAR_DAYS=30
-RETENTION_ATOMIC_DAYS=30
-RETENTION_UPLOADS_DAYS=30
-RETENTION_SUMMARY_LOGS_DAYS=90
-RETENTION_INTERVENTIONS_DAYS=90
-
 # Archival settings
+ARCHIVE_DIR=./archives
 ARCHIVE_ENABLED=true
 ARCHIVE_BATCH_SIZE=10000
-```
-
-### Setup
-
-#### 1. Create Storage Bucket
-
-In Supabase Dashboard:
-1. Go to **Storage** → **Create a new bucket**
-2. Name: `mobibox-archive`
-3. Public: **No** (private bucket)
-
-Or via SQL:
-```sql
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('mobibox-archive', 'mobibox-archive', false)
-ON CONFLICT (id) DO NOTHING;
-```
-
-#### 2. Add Service Role Key
-
-The archival service needs admin access to storage:
-
-```env
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIs...
-```
-
-Get this from **Project Settings → API → service_role** (keep secret!).
-
-#### 3. Run Migration
-
-```sql
--- Migration 005: Create archival_logs table
-\i migrations/005_storage_archival.sql
-```
-
-#### 4. Install PyArrow
-
-```bash
-conda activate Mobibox_backend
-conda install -c conda-forge pyarrow
-# or
-pip install pyarrow
 ```
 
 ### Manual Archival
@@ -1498,87 +1341,26 @@ Trigger archival manually:
 # Archive all tables
 celery -A src.celery_app.celery_app call archive_data_periodic
 
-# Archive specific table
-celery -A src.celery_app.celery_app call archive_table_manual --args='["imu", 7]'
-
 # Check archive statistics
 celery -A src.celery_app.celery_app call get_archive_stats
 ```
 
 ### Monitoring
 
-#### Check Archival Logs
-
-```sql
--- Recent archival operations
-SELECT * FROM v_archival_history;
-
--- Recent failures
-SELECT * FROM v_recent_archival_failures;
-
--- Storage efficiency over time
-SELECT
-    table_name,
-    archival_timestamp,
-    records_archived,
-    file_size_bytes,
-    ROUND(file_size_bytes::numeric / NULLIF(records_archived, 0), 2) as bytes_per_record
-FROM archival_logs
-WHERE status = 'completed'
-ORDER BY archival_timestamp DESC
-LIMIT 20;
-```
-
-#### Storage Efficiency
-
-```sql
--- Average bytes per record by table
-SELECT
-    table_name,
-    COUNT(*) as archive_count,
-    SUM(records_archived) as total_records,
-    SUM(file_size_bytes) as total_bytes,
-    ROUND(SUM(file_size_bytes)::numeric / NULLIF(SUM(records_archived), 0), 2) as avg_bytes_per_record,
-    pg_size_pretty(SUM(file_size_bytes)) as total_size
-FROM archival_logs
-WHERE status = 'completed'
-GROUP BY table_name;
-```
+Archived file storage is managed locally. Check `ARCHIVE_DIR` for output files and `logs/` for archival logs.
 
 ### Restoring Data
 
-To restore archived data:
+To restore archived data, read Parquet files with `pandas`:
 
 ```python
 import pandas as pd
-from supabase import create_client
 
-# Download Parquet file
-supabase = create_client(url, service_role_key)
-response = supabase.storage.from_('mobibox-archive').download('archives/imu/2026/03/2026-03-01.parquet')
+# Read archived Parquet
+df = pd.read_parquet('./archives/imu/2026/03/2026-03-01.parquet')
 
-# Read Parquet
-df = pd.read_parquet(io.BytesIO(response))
-
-# Insert back to database
-# ... (your restore logic)
-```
-
-### Archival Logs Table
-
-```sql
-CREATE TABLE archival_logs (
-    id SERIAL PRIMARY KEY,
-    table_name VARCHAR(100) NOT NULL,
-    records_archived INTEGER DEFAULT 0,
-    records_deleted INTEGER DEFAULT 0,
-    storage_path VARCHAR(500),
-    file_size_bytes BIGINT,  -- Parquet file size
-    archival_timestamp TIMESTAMPTZ DEFAULT NOW(),
-    status VARCHAR(20),  -- 'completed', 'failed', 'partial'
-    error_message TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+# Re-insert to MongoDB as needed
+# ...
 ```
 
 ---

@@ -17,6 +17,8 @@ from src.query.constants import (
 from src.query.atomic_encoding import encode_atomic_activities
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
+MAX_ATOMIC_DOCS = 50_000        # Hard limit on documents returned
+QUERY_MAX_TIME_MS = 15_000      # 15-second query timeout
 
 
 def _serialize_doc(doc: dict) -> dict:
@@ -206,8 +208,8 @@ async def get_atomic_activities(
         cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=duration)
         query["timestamp"] = {"$gte": cutoff_time}
 
-    cursor = db[ATOMIC_ACTIVITIES_COLLECTION].find(query).sort("timestamp", 1)
-    docs = await cursor.to_list(None)
+    cursor = db[ATOMIC_ACTIVITIES_COLLECTION].find(query).sort("timestamp", 1).max_time_ms(QUERY_MAX_TIME_MS)
+    docs = await cursor.to_list(MAX_ATOMIC_DOCS)
 
     if not docs:
         return {
@@ -274,8 +276,8 @@ async def get_atomic_activities_encoded(
         cutoff_time = datetime.now(CHINA_TZ) - timedelta(seconds=duration)
         query["timestamp"] = {"$gte": cutoff_time}
 
-    cursor = db[ATOMIC_ACTIVITIES_COLLECTION].find(query).sort("timestamp", 1)
-    docs = await cursor.to_list(None)
+    cursor = db[ATOMIC_ACTIVITIES_COLLECTION].find(query).sort("timestamp", 1).max_time_ms(QUERY_MAX_TIME_MS)
+    docs = await cursor.to_list(MAX_ATOMIC_DOCS)
 
     if not docs:
         return encode_atomic_activities([])

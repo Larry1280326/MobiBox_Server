@@ -24,7 +24,13 @@ async def get_database() -> AsyncIOMotorDatabase:
     global _async_client, _async_db
     if _async_client is None:
         settings = get_settings()
-        _async_client = AsyncIOMotorClient(settings.mongodb_url)
+        _async_client = AsyncIOMotorClient(
+            settings.mongodb_url,
+            serverSelectionTimeoutMS=settings.mongodb_server_selection_timeout_ms,
+            connectTimeoutMS=settings.mongodb_connect_timeout_ms,
+            maxPoolSize=settings.mongodb_max_pool_size,
+            minPoolSize=settings.mongodb_min_pool_size,
+        )
         _async_db = _async_client[settings.mongodb_db_name]
         logger.info(f"Connected to MongoDB: {settings.mongodb_url}/{settings.mongodb_db_name}")
     return _async_db
@@ -45,7 +51,11 @@ def get_sync_database():
     global _sync_client, _sync_db
     if _sync_client is None:
         settings = get_settings()
-        _sync_client = MongoClient(settings.mongodb_url)
+        _sync_client = MongoClient(
+            settings.mongodb_url,
+            serverSelectionTimeoutMS=settings.mongodb_server_selection_timeout_ms,
+            connectTimeoutMS=settings.mongodb_connect_timeout_ms,
+        )
         _sync_db = _sync_client[settings.mongodb_db_name]
     return _sync_db
 

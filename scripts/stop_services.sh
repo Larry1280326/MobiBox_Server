@@ -69,6 +69,22 @@ else
 fi
 
 # =========================================
+# Stop MongoDB (Optional)
+# =========================================
+echo ""
+echo -e "${YELLOW}Do you want to stop MongoDB? (y/N)${NC}"
+read -t 5 -n 1 -r
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo -e "${YELLOW}Stopping MongoDB...${NC}"
+    docker stop mobibox-mongo 2>/dev/null || {
+        echo -e "${YELLOW}MongoDB container not found or not running${NC}"
+    }
+    echo -e "${GREEN}✓ MongoDB stopped${NC}"
+else
+    echo -e "${YELLOW}Keeping MongoDB running (use 'docker stop mobibox-mongo' to stop manually)${NC}"
+fi
+
+# =========================================
 # Clean up PID files
 # =========================================
 echo -e "${YELLOW}Cleaning up PID files...${NC}"
