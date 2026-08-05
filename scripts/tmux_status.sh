@@ -38,9 +38,9 @@ echo ""
 
 # ── FastAPI ─────────────────────────────────────────────────────────────────
 
-echo -e "${BLUE}FastAPI Server (port 8000):${NC}"
-if curl -s http://localhost:8000/health > /dev/null 2>&1; then
-    HEALTH=$(curl -s http://localhost:8000/health 2>/dev/null)
+echo -e "${BLUE}FastAPI Server (port 8001):${NC}"
+if curl -s http://localhost:8001/health > /dev/null 2>&1; then
+    HEALTH=$(curl -s http://localhost:8001/health 2>/dev/null)
     echo -e "  ${GREEN}✓${NC} Running — $HEALTH"
 else
     if pgrep -f "uvicorn src.main:app" > /dev/null 2>&1; then
@@ -130,5 +130,5 @@ echo -e "  Attach:        ./scripts/tmux_attach.sh"
 echo -e "  Stop:          ./scripts/tmux_stop.sh"
 echo -e "  Restart:       ./scripts/tmux_stop.sh && ./scripts/tmux_start.sh"
 echo -e "  View API logs: tail -f $LOGS_DIR/api.log"
-echo -e "  Test API:      curl http://localhost:8000/health"
+echo -e "  Test API:      curl http://localhost:8001/health"
 echo ""

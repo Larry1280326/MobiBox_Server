@@ -49,7 +49,7 @@ class LLMSettings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "qwen/qwen3.5-flash-02-23"  # Free model
-    openrouter_site_url: str = "http://localhost:8000"  # Optional, for rankings
+    openrouter_site_url: str = "http://localhost:8001"  # Optional, for rankings
     openrouter_app_name: str = "MobiBox"  # Optional, for rankings
     default_temperature: float = 0.1
 

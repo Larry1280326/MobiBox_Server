@@ -59,7 +59,7 @@ chmod +x scripts/tmux_*.sh
 
 ```
 Session: mobibox
-├── Window 0: api      — FastAPI server (uvicorn, port 8000)
+├── Window 0: api      — FastAPI server (uvicorn, port 8001)
 ├── Window 1: worker   — Celery worker (all queues)
 ├── Window 2: beat     — Celery beat scheduler
 └── Window 3: logs     — Live log monitor (3-pane split)
@@ -185,7 +185,7 @@ conda env create -f environment.yml
 | Service | Port | Description |
 |---------|------|-------------|
 | RabbitMQ | 5672, 15672 (Web UI) | Message queue broker (Docker container) |
-| FastAPI | 8000 | Main API server (uvicorn) |
+| FastAPI | 8001 | Main API server (uvicorn) |
 | Celery Worker | — | Background task worker |
 | Celery Beat | — | Periodic task scheduler |
 

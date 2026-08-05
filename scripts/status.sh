@@ -50,10 +50,10 @@ echo ""
 # Check FastAPI
 # =========================================
 echo -e "${BLUE}FastAPI Server:${NC}"
-if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+if curl -s http://localhost:8001/health > /dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} Running"
-    echo -e "    URL: http://localhost:8000"
-    echo -e "    Health: $(curl -s http://localhost:8000/health 2>/dev/null || echo 'Unknown')"
+    echo -e "    URL: http://localhost:8001"
+    echo -e "    Health: $(curl -s http://localhost:8001/health 2>/dev/null || echo 'Unknown')"
 else
     if pgrep -f "uvicorn src.main:app" > /dev/null; then
         echo -e "  ${YELLOW}⚠${NC} Process running but not responding"
@@ -123,7 +123,7 @@ echo ""
 echo -e "${BLUE}Port Usage:${NC}"
 echo -e "  27017 (MongoDB):    $(check_port 27017 && echo -e "${GREEN}In Use${NC}" || echo -e "${RED}Free${NC}")"
 echo -e "  5672  (RabbitMQ):   $(check_port 5672 && echo -e "${GREEN}In Use${NC}" || echo -e "${RED}Free${NC}")"
-echo -e "  8000  (FastAPI):     $(check_port 8000 && echo -e "${GREEN}In Use${NC}" || echo -e "${RED}Free${NC}")"
+echo -e "  8001  (FastAPI):     $(check_port 8001 && echo -e "${GREEN}In Use${NC}" || echo -e "${RED}Free${NC}")"
 echo ""
 
 # =========================================
@@ -136,5 +136,5 @@ echo -e "  Start all:    ./scripts/start_services.sh"
 echo -e "  Stop all:     ./scripts/stop_services.sh"
 echo -e "  Restart all:   ./scripts/restart_services.sh"
 echo -e "  View logs:     tail -f logs/api.log"
-echo -e "  Test API:     curl http://localhost:8000/health"
+echo -e "  Test API:     curl http://localhost:8001/health"
 echo ""

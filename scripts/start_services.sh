@@ -125,17 +125,17 @@ fi
 # =========================================
 echo -e "${BLUE}Step 3: FastAPI Server${NC}"
 
-if check_port 8000; then
-    echo -e "${YELLOW}Port 8000 is already in use. Skipping FastAPI server startup.${NC}"
+if check_port 8001; then
+    echo -e "${YELLOW}Port 8001 is already in use. Skipping FastAPI server startup.${NC}"
     echo -e "${YELLOW}To restart, run: pkill -f 'uvicorn src.main:app'${NC}"
 else
     echo -e "${YELLOW}Starting FastAPI server...${NC}"
     cd "$PROJECT_ROOT"
     # Logs are handled by Python's RotatingFileHandler in src/logging_config.py
     # Redirect stdout/stderr to /dev/null to avoid nohup.out
-    nohup uvicorn src.main:app --host 0.0.0.0 --port 8000 > /dev/null 2>&1 &
+    nohup uvicorn src.main:app --host 0.0.0.0 --port 8001 > /dev/null 2>&1 &
     echo $! > "$LOGS_DIR/api.pid"
-    wait_for_service "FastAPI" 8000
+    wait_for_service "FastAPI" 8001
 fi
 
 # =========================================
@@ -189,7 +189,7 @@ echo ""
 echo -e "${BLUE}Service Status:${NC}"
 echo -e "  ${GREEN}✓${NC} MongoDB:        mongodb://localhost:27017"
 echo -e "  ${GREEN}✓${NC} RabbitMQ:       http://localhost:15672 (guest/guest)"
-echo -e "  ${GREEN}✓${NC} FastAPI:         http://localhost:8000"
+echo -e "  ${GREEN}✓${NC} FastAPI:         http://localhost:8001"
 echo -e "  ${GREEN}✓${NC} Celery Worker:   Running"
 echo -e "  ${GREEN}✓${NC} Celery Beat:     Running"
 echo ""
@@ -207,5 +207,5 @@ echo -e "${BLUE}Quick Commands:${NC}"
 echo -e "  View API logs:      tail -f $LOGS_DIR/api.log"
 echo -e "  View worker logs:   tail -f $LOGS_DIR/celery_worker.log"
 echo -e "  Stop all services:  ./scripts/stop_services.sh"
-echo -e "  Check health:       curl http://localhost:8000/health"
+echo -e "  Check health:       curl http://localhost:8001/health"
 echo ""

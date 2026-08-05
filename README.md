@@ -8,7 +8,7 @@ companion app via a REST API.
 ## Architecture
 
 ```
-Android App ──HTTP──▶ FastAPI (port 8000) ──▶ MongoDB
+Android App ──HTTP──▶ FastAPI (port 8001) ──▶ MongoDB
                            │
                     ┌──────┴──────┐
                     ▼             ▼
@@ -36,7 +36,7 @@ cp .env.example .env
 ./scripts/tmux_start.sh
 
 # 4. Verify
-curl http://localhost:8000/health
+curl http://localhost:8001/health
 ```
 
 **Manual start** (if not using scripts):
@@ -46,7 +46,7 @@ curl http://localhost:8000/health
 docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 
 # API server
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8001
 
 # Celery worker
 celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary
@@ -151,7 +151,7 @@ Uploads trigger Celery HAR and atomic-activity processing.
 | `GET` | `/imu_test/statistics` | Accuracy statistics per label |
 | `GET` | `/imu_test/labels` | Valid activity labels |
 
-Full API reference: `http://localhost:8000/docs` (Swagger UI).
+Full API reference: `http://localhost:8001/docs` (Swagger UI).
 
 ---
 

@@ -133,13 +133,13 @@ tmux send-keys -t "$SESSION:api" \
 tmux send-keys -t "$SESSION:api" \
     "echo -e '${GREEN}Logs → $LOGS_DIR/api.log${NC}'" Enter
 tmux send-keys -t "$SESSION:api" \
-    "echo -e '${GREEN}Health → curl http://localhost:8000/health${NC}'" Enter
+    "echo -e '${GREEN}Health → curl http://localhost:8001/health${NC}'" Enter
 tmux send-keys -t "$SESSION:api" \
     "echo ''" Enter
 tmux send-keys -t "$SESSION:api" \
     "eval \"\$(conda shell.bash hook)\" && conda activate Mobibox_backend && echo '[conda] Mobibox_backend activated'" Enter
 tmux send-keys -t "$SESSION:api" \
-    "uvicorn src.main:app --host 0.0.0.0 --port 8000 --log-level info 2>&1" Enter
+    "uvicorn src.main:app --host 0.0.0.0 --port 8001 --log-level info 2>&1" Enter
 
 # ── Window 1: Celery Worker ────────────────────────────────────────────────
 
@@ -209,7 +209,7 @@ echo -e "${BLUE}Session:${NC}  tmux attach -t $SESSION"
 echo -e "          ./scripts/tmux_attach.sh"
 echo ""
 echo -e "${BLUE}Windows:${NC}"
-echo -e "  ${GREEN}api${NC}     — FastAPI server (port 8000)"
+echo -e "  ${GREEN}api${NC}     — FastAPI server (port 8001)"
 echo -e "  ${GREEN}worker${NC}  — Celery worker"
 echo -e "  ${GREEN}beat${NC}    — Celery beat scheduler"
 echo -e "  ${GREEN}logs${NC}    — Live log monitor"

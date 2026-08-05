@@ -36,7 +36,7 @@ def mock_llm_settings():
         settings.openrouter_api_key = "test-api-key"
         settings.openrouter_base_url = "https://openrouter.ai/api/v1"
         settings.openrouter_model = "qwen/qwen3-vl-30b-a3b-thinking"
-        settings.openrouter_site_url = "http://localhost:8000"
+        settings.openrouter_site_url = "http://localhost:8001"
         settings.openrouter_app_name = "MobiBox"
         settings.default_temperature = 0.1
         mock.return_value = settings
