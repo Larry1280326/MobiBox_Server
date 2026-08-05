@@ -6,16 +6,101 @@ This directory contains scripts for managing MobiBox backend services.
 
 | Script | Linux/macOS | Windows | Description |
 |--------|-------------|---------|-------------|
-| Start Services | `start_services.sh` | `start_services.ps1` | Start RabbitMQ, FastAPI, Celery Worker, Celery Beat |
+| Start Services (nohup) | `start_services.sh` | `start_services.ps1` | Start services with nohup in background |
+| Start Services (tmux)  | `tmux_start.sh`    | — | **Recommended for servers** — tmux session with live output |
 | Stop Services | `stop_services.sh` | `stop_services.ps1` | Stop all services (optional RabbitMQ prompt) |
+| Stop Services (tmux)   | `tmux_stop.sh`     | — | Stop tmux-managed services |
 | Restart Services | `restart_services.sh` | `restart_services.ps1` | Stop all services, wait 3s, start all services |
 | Status Check | `status.sh` | `status.ps1` | Check status of all services, ports, and models |
+| Status Check (tmux)    | `tmux_status.sh`   | — | Check tmux session and service health |
+| Attach tmux            | `tmux_attach.sh`   | — | Attach to running tmux session |
 | Download Models | `download_models.sh` | `download_models.ps1` | Download sentence-transformers models for offline use |
 | Download Models (Python) | `download_sentence_transformers.py` | *(cross-platform)* | Standalone Python script with `--verify` mode |
 
 ### Shared Module
 
 - `common.ps1` — Shared helper functions dot-sourced by all PowerShell scripts (process management, port checking, conda helpers, etc.)
+
+## tmux Setup (Recommended for Linux Servers)
+
+The tmux scripts provide a **proper terminal multiplexer** approach — each service runs in its own tmux window with live visible output, and services survive SSH disconnects.
+
+### Why tmux over nohup?
+
+| Feature | nohup | tmux |
+|---------|-------|------|
+| Live output | ❌ Redirected to /dev/null | ✅ Each service in its own window |
+| Reattach to view logs | `tail -f logs/*.log` | `tmux attach` — see all services at once |
+| Graceful restart | `pkill` + restart | Kill window, start fresh in same session |
+| Service isolation | One PID per process | Separate windows, independent scrollback |
+| Log rotation | Python RotatingFileHandler | Same Python handler + visible pane output |
+
+### Quick Start
+
+```bash
+# First-time: make scripts executable
+chmod +x scripts/tmux_*.sh
+
+# Start all services in tmux
+./scripts/tmux_start.sh
+
+# Attach to the session to view live output
+./scripts/tmux_attach.sh
+
+# Detach (services keep running): Ctrl-b d
+# Stop everything:
+./scripts/tmux_stop.sh
+
+# Check status:
+./scripts/tmux_status.sh
+```
+
+### tmux Session Layout
+
+```
+Session: mobibox
+├── Window 0: api      — FastAPI server (uvicorn, port 8000)
+├── Window 1: worker   — Celery worker (all queues)
+├── Window 2: beat     — Celery beat scheduler
+└── Window 3: logs     — Live log monitor (3-pane split)
+                         ├── api.log (top)
+                         ├── celery_worker.log (bottom-left)
+                         └── celery_beat.log (bottom-right)
+```
+
+### tmux Keybindings
+
+| Key | Action |
+|-----|--------|
+| `Ctrl-b 0`–`3` | Switch to window by number |
+| `Ctrl-b n` / `p` | Next / previous window |
+| `Ctrl-b d` | Detach (services keep running) |
+| `Ctrl-b [` | Scroll mode (`q` to quit, arrows/PgUp/PgDn to scroll) |
+| `Ctrl-b w` | Window list with preview |
+| `Ctrl-b ,` | Rename current window |
+
+### Log Rotation
+
+Logs are handled at two levels:
+
+1. **Python `RotatingFileHandler`** (automatic) — Configured in `src/logging_config.py`:
+   - 10 MB max per log file
+   - 5 backup files retained (`api.log`, `api.log.1`, …, `api.log.5`)
+   - Applies to `logs/api.log`, `logs/celery_worker.log`, `logs/celery_beat.log`
+
+2. **System `logrotate`** (optional) — Drop this into `/etc/logrotate.d/mobibox` for an extra safety net:
+   ```
+   /path/to/MobiBox_Server/logs/*.log {
+       daily
+       rotate 14
+       maxsize 50M
+       compress
+       delaycompress
+       missingok
+       notifempty
+       copytruncate
+   }
+   ```
 
 ## Platform Quick-Start
 
