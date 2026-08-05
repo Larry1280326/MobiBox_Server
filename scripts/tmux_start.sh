@@ -137,6 +137,8 @@ tmux send-keys -t "$SESSION:api" \
 tmux send-keys -t "$SESSION:api" \
     "echo ''" Enter
 tmux send-keys -t "$SESSION:api" \
+    "eval \"\$(conda shell.bash hook)\" && conda activate Mobibox_backend && echo '[conda] Mobibox_backend activated'" Enter
+tmux send-keys -t "$SESSION:api" \
     "uvicorn src.main:app --host 0.0.0.0 --port 8000 --log-level info 2>&1" Enter
 
 # ── Window 1: Celery Worker ────────────────────────────────────────────────
@@ -148,6 +150,8 @@ tmux send-keys -t "$SESSION:worker" \
     "echo -e '${GREEN}Logs → $LOGS_DIR/celery_worker.log${NC}'" Enter
 tmux send-keys -t "$SESSION:worker" \
     "echo ''" Enter
+tmux send-keys -t "$SESSION:worker" \
+    "eval \"\$(conda shell.bash hook)\" && conda activate Mobibox_backend && echo '[conda] Mobibox_backend activated'" Enter
 tmux send-keys -t "$SESSION:worker" \
     "celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary 2>&1" Enter
 
@@ -161,11 +165,15 @@ tmux send-keys -t "$SESSION:beat" \
 tmux send-keys -t "$SESSION:beat" \
     "echo ''" Enter
 tmux send-keys -t "$SESSION:beat" \
+    "eval \"\$(conda shell.bash hook)\" && conda activate Mobibox_backend && echo '[conda] Mobibox_backend activated'" Enter
+tmux send-keys -t "$SESSION:beat" \
     "celery -A src.celery_app.celery_app beat --loglevel=info 2>&1" Enter
 
 # ── Window 3: Live Log Monitor ─────────────────────────────────────────────
 
 tmux new-window -t "$SESSION" -n "logs" -c "$PROJECT_ROOT"
+tmux send-keys -t "$SESSION:logs" \
+    "eval \"\$(conda shell.bash hook)\" && conda activate Mobibox_backend" Enter
 tmux send-keys -t "$SESSION:logs" \
     "echo -e '${BLUE}=== Live Log Monitor ===${NC}'" Enter
 tmux send-keys -t "$SESSION:logs" \
