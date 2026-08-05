@@ -279,27 +279,8 @@ async def generate_summary_for_user(
     hours: int,
     log_type: str,
 ) -> tuple[Optional[dict], Optional[str]]:
-    """Generate summary for a user with threshold checks and timestamp tracking.
-
-    Returns:
-        Tuple of (summary_log_dict, skip_reason).
-        - On success: (summary_dict, None)
-        - On skip: (None, reason_string)
-        - On generation failure: (None, "Summary generation failed")
-    """
-    if log_type == "hourly":
-        is_ready, reason = await check_user_hourly_ready(user)
-        if not is_ready:
-            logger.info(f"Skipping {user}: {reason}")
-            return None, reason
-
-    has_enough, compressed = await should_generate_summary(user, hours)
-    if not has_enough:
-        total_records = compressed.get("total_records", 0)
-        reason = f"Insufficient data (records={total_records}, need={MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG})"
-        logger.info(f"Skipping {user}: {reason}")
-        return None, reason
-
+    """Generate summary for a user — all gates temporarily removed."""
+    compressed = await compress_atomic_activities(user, hours)
     summary_log = await generate_summary(user, compressed, log_type=log_type)
 
     if summary_log:
