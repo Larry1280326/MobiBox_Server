@@ -25,44 +25,12 @@ HAR_DEBOUNCE_SECONDS = 2  # Minimum time between HAR processing per user
 ATOMIC_DEBOUNCE_SECONDS = 5  # Minimum time between atomic processing per user
 
 # =============================================================================
-# TSFM Model Configuration (Time Series Foundation Model)
-# Zero-shot activity recognition with 87+ activity labels
-# =============================================================================
-# =============================================================================
 # SelfSupEncoder Model Configuration (IMU-SelfSupEncoder-v1)
-# Lightweight (~1.4M params) self-supervised ViT for IMU HAR.
-# Downloads from HuggingFace on first use (~5 MB).
+# Lightweight (~1.6M params) self-supervised ViT for IMU HAR.
+# Downloads from HuggingFace on first use (~5 MB), or load from models/imu_selfsup/
 # =============================================================================
 USE_SELFSUP_MODEL = True
 SELFSUP_MIN_SAMPLES = 50  # Minimum IMU samples for SelfSupEncoder (1s @ 50Hz)
-
-# =============================================================================
-# TSFM Model Configuration (Time Series Foundation Model)
-# Zero-shot activity recognition with 87+ activity labels
-# =============================================================================
-# TSFM disabled until checkpoint is downloaded (~400MB).
-# The legacy IMU transformer handles HAR inference reliably.
-# To enable TSFM: download best.pt to src/celery_app/services/tsfm_model/ckpts/
-#   and set USE_TSFM_MODEL = True
-USE_TSFM_MODEL = False
-TSFM_MIN_SAMPLES = 10  # Minimum IMU samples required for TSFM inference
-
-# Legacy IMU HAR model (Transformer encoder); set to None to use mock
-HAR_IMU_MODEL_CHECKPOINT = "src/celery_app/services/imu_model_utils/ckpts/run_05_06_25_14_16_final_no_cycling_7_class8_25.pth"
-
-# IMU Transformer config (must match trained checkpoint)
-HAR_IMU_MODEL_CONFIG = {
-    "input_dim": 9,
-    "window_size": 50,
-    "num_classes": 7,
-    "transformer_dim": 64,
-    "nhead": 4,
-    "dim_feedforward": 128,
-    "num_encoder_layers": 6,
-    "transformer_dropout": 0.1,
-    "transformer_activation": "gelu",
-    "encode_position": True,
-}
 
 # Beat schedule
 CELERY_BEAT_SCHEDULE = {

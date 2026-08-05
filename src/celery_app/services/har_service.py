@@ -1,8 +1,6 @@
 """Business logic for HAR (Human Activity Recognition) processing.
 
-Uses TSFM (Time Series Foundation Model) for zero-shot activity recognition
-with fallback to legacy IMU transformer or mock model.
-
+Uses IMU-SelfSupEncoder-v1 as primary model with mock model fallback.
 Supports incremental processing via last processed timestamp tracking.
 """
 
@@ -10,22 +8,13 @@ import asyncio
 import logging
 import random
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
-
-import numpy as np
 
 from src.database import get_database
 from src.celery_app.config import (
     HAR_IMU_WINDOW_SECONDS,
     HAR_DATA_DELAY_SECONDS,
-    HAR_IMU_WINDOW_SIZE,
-    HAR_IMU_INPUT_CHANNELS,
-    HAR_IMU_MODEL_CHECKPOINT,
-    HAR_IMU_MODEL_CONFIG,
-    USE_TSFM_MODEL,
-    TSFM_MIN_SAMPLES,
     USE_SELFSUP_MODEL,
     SELFSUP_MIN_SAMPLES,
 )
@@ -38,40 +27,7 @@ from src.celery_app.services.processing_state_service import (
 logger = logging.getLogger(__name__)
 from src.celery_app.schemas.har_schemas import HARLabel
 
-# IMU model: label index -> DB enum string (from imu_labels.md)
-HAR_LABEL_BY_INDEX = [
-    "unknown",        # 0
-    "standing",       # 1
-    "sitting",        # 2
-    "lying",          # 3
-    "walking",        # 4
-    "climbing stairs",  # 5
-    "running",        # 6
-]
-
-# Column order for building model input tensor (must match HAR_IMU_INPUT_CHANNELS)
-IMU_COLUMNS = [
-    "acc_X", "acc_Y", "acc_Z",
-    "gyro_X", "gyro_Y", "gyro_Z",
-    "mag_X", "mag_Y", "mag_Z",
-]
-
-# Mock HAR labels - DB enum values (fallback when model not used)
-MOCK_HAR_LABELS = [
-    "walking",
-    "running",
-    "sitting",
-    "standing",
-    "lying",
-    "climbing stairs",
-    "unknown",
-]
-
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
-
-# Cached IMU model (lazy-loaded)
-_imu_model = None
-_imu_model_available = None
 
 
 async def get_imu_window(
@@ -102,85 +58,13 @@ async def get_imu_window(
     return data
 
 
-def _imu_data_to_tensor(imu_data: list[dict]) -> np.ndarray:
-    """Build a (1, window_size, input_dim) array from IMU list."""
-    n = len(imu_data)
-    out = np.zeros((1, HAR_IMU_WINDOW_SIZE, HAR_IMU_INPUT_CHANNELS), dtype=np.float32)
-    for i in range(min(n, HAR_IMU_WINDOW_SIZE)):
-        row = imu_data[i]
-        for j, col in enumerate(IMU_COLUMNS):
-            val = row.get(col)
-            out[0, i, j] = float(val) if val is not None else 0.0
-    return out
-
-
-def _resolve_checkpoint_path() -> Path | None:
-    """Resolve checkpoint path: try as given, then relative to imu_model_utils/ckpts."""
-    if not HAR_IMU_MODEL_CHECKPOINT:
-        return None
-    path = Path(HAR_IMU_MODEL_CHECKPOINT)
-    if path.is_file():
-        return path
-    ckpts_dir = Path(__file__).resolve().parent / "imu_model_utils" / "ckpts"
-    fallback = ckpts_dir / path.name
-    return fallback if fallback.is_file() else None
-
-
-def _get_imu_model():
-    """Load and cache IMU transformer model; returns (model, available)."""
-    global _imu_model, _imu_model_available
-    if _imu_model_available is not None:
-        return _imu_model, _imu_model_available
-    path = _resolve_checkpoint_path()
-    if path is None:
-        _imu_model_available = False
-        return None, False
-    try:
-        import torch
-        from src.celery_app.services.imu_model_utils.imu_transformer_encoder import (
-            IMUTransformerEncoder,
-        )
-        model = IMUTransformerEncoder(HAR_IMU_MODEL_CONFIG)
-        state = torch.load(path, map_location="cpu", weights_only=True)
-        if isinstance(state, dict) and "model_state_dict" in state:
-            state = state["model_state_dict"]
-        elif isinstance(state, dict) and "state_dict" in state:
-            state = state["state_dict"]
-        model.load_state_dict(state, strict=True)
-        model.eval()
-        _imu_model = model
-        _imu_model_available = True
-        return _imu_model, True
-    except Exception:
-        _imu_model_available = False
-        return None, False
-
-
-def _run_imu_model_sync(imu_tensor: np.ndarray) -> tuple[int, float]:
-    """Run IMU model in sync context; returns (class_index, confidence)."""
-    import torch
-    model, available = _get_imu_model()
-    if not available or model is None:
-        raise RuntimeError("IMU model not available")
-    with torch.no_grad():
-        x = torch.from_numpy(imu_tensor)
-        batch = {"imu": x}
-        log_probs = model(batch)
-        probs = torch.exp(log_probs)
-        pred_idx = int(log_probs.argmax(dim=1).item())
-        confidence = float(probs[0, pred_idx].item())
-    return pred_idx, confidence
-
-
 async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
     """
     Run HAR model on IMU data.
 
     Priority:
-    1. TSFM model (if USE_TSFM_MODEL=True and checkpoint available)
-    2. SelfSupEncoder (if USE_SELFSUP_MODEL=True and HF model cached)
-    3. Legacy IMU transformer (if checkpoint configured)
-    4. Mock model (fallback)
+    1. SelfSupEncoder (if USE_SELFSUP_MODEL=True and model available)
+    2. Mock model (fallback)
 
     Returns:
         Tuple of (label, confidence, source)
@@ -189,31 +73,7 @@ async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
         logger.warning("No IMU data provided, returning unknown")
         return "unknown", 0.5, "insufficient_data"
 
-    # Try TSFM model first (if enabled)
-    if USE_TSFM_MODEL:
-        try:
-            from .tsfm_service import run_tsfm_inference, is_tsfm_available
-
-            tsfm_available = is_tsfm_available()
-            logger.debug(f"TSFM model enabled, available: {tsfm_available}, samples: {len(imu_data)}, min_required: {TSFM_MIN_SAMPLES}")
-
-            if tsfm_available and len(imu_data) >= TSFM_MIN_SAMPLES:
-                logger.info(f"Running TSFM inference with {len(imu_data)} samples")
-                label, confidence, source = await asyncio.to_thread(
-                    run_tsfm_inference, imu_data
-                )
-                logger.info(f"TSFM result: label={label}, confidence={confidence}")
-                return label, confidence, source
-            elif not tsfm_available:
-                logger.warning("TSFM model not available, falling back to SelfSupEncoder")
-            elif len(imu_data) < TSFM_MIN_SAMPLES:
-                logger.warning(f"Not enough samples for TSFM: {len(imu_data)} < {TSFM_MIN_SAMPLES}, falling back")
-        except Exception as e:
-            logger.warning(f"TSFM model failed, falling back to SelfSupEncoder: {e}", exc_info=True)
-    else:
-        logger.debug("TSFM model disabled (USE_TSFM_MODEL=False)")
-
-    # Try SelfSupEncoder (if enabled)
+    # Try SelfSupEncoder
     if USE_SELFSUP_MODEL and len(imu_data) >= SELFSUP_MIN_SAMPLES:
         try:
             from .imu_selfsup_service import (
@@ -233,30 +93,16 @@ async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
                 logger.info(f"SelfSupEncoder result: label={label}, confidence={confidence}")
                 return label, confidence, source
             else:
-                logger.warning("SelfSupEncoder model not available, falling back to legacy")
+                logger.warning("SelfSupEncoder not available, using mock model")
         except Exception as e:
-            logger.warning(
-                f"SelfSupEncoder failed, falling back to legacy: {e}", exc_info=True
-            )
+            logger.warning(f"SelfSupEncoder failed, using mock model: {e}", exc_info=True)
     elif USE_SELFSUP_MODEL:
         logger.debug(
             f"Not enough samples for SelfSupEncoder: "
             f"{len(imu_data)} < {SELFSUP_MIN_SAMPLES}"
         )
 
-    # Fall back to legacy IMU transformer
-    model, available = _get_imu_model()
-    if available and model is not None:
-        logger.info(f"Running legacy IMU model inference with {len(imu_data)} samples")
-        tensor = _imu_data_to_tensor(imu_data)
-        pred_idx, confidence = await asyncio.to_thread(_run_imu_model_sync, tensor)
-        label = HAR_LABEL_BY_INDEX[pred_idx] if pred_idx < len(HAR_LABEL_BY_INDEX) else "unknown"
-        logger.info(f"Legacy IMU model result: label={label}, confidence={confidence}")
-        return label, round(confidence, 2), "imu_model"
-    else:
-        logger.warning("Legacy IMU model not available, using mock model")
-
-    # Final fallback to mock model
+    # Fallback to mock model
     logger.info(f"Running mock HAR model with {len(imu_data)} samples")
     label, confidence = await run_mock_har_model(imu_data)
     return label, confidence, "mock_har"
