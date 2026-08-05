@@ -96,15 +96,30 @@ def _load_selfsup_model():
         from huggingface_hub import hf_hub_download
 
         device = torch.device("cpu")
-        logger.info("Loading IMU-SelfSupEncoder-v1 from %s ...", SELFSUP_MODEL_ID)
 
-        # Download the custom modeling file from HuggingFace
-        modeling_path = hf_hub_download(
-            SELFSUP_MODEL_ID,
-            "modeling_imu_encoder.py",
-        )
+        # ------------------------------------------------------------------
+        # Resolve the model directory — local copy first, then HF Hub
+        # ------------------------------------------------------------------
+        local_dir = Path(__file__).resolve().parent.parent.parent.parent \
+            / "models" / "imu_selfsup"
+        local_model = local_dir / "model.safetensors"
+        local_config = local_dir / "config.json"
+        local_code = local_dir / "modeling_imu_encoder.py"
 
-        # Import it dynamically so IMUMaskedEncoder is available
+        if local_model.is_file() and local_config.is_file() and local_code.is_file():
+            # Use pre-downloaded local copy (no network needed)
+            logger.info("Loading IMU-SelfSupEncoder-v1 from local: %s", local_dir)
+            modeling_path = str(local_code)
+            model_path = str(local_dir)
+        else:
+            # Download from HuggingFace Hub
+            logger.info("Loading IMU-SelfSupEncoder-v1 from HF Hub: %s ...", SELFSUP_MODEL_ID)
+            modeling_path = hf_hub_download(
+                SELFSUP_MODEL_ID, "modeling_imu_encoder.py",
+            )
+            model_path = SELFSUP_MODEL_ID
+
+        # Import the custom modeling file dynamically
         spec = importlib.util.spec_from_file_location(
             "modeling_imu_encoder", modeling_path,
         )
@@ -114,8 +129,8 @@ def _load_selfsup_model():
 
         IMUMaskedEncoder = mod.IMUMaskedEncoder
 
-        # Load model weights (uses the same HF cache)
-        model = IMUMaskedEncoder.from_pretrained(SELFSUP_MODEL_ID)
+        # Load model weights
+        model = IMUMaskedEncoder.from_pretrained(model_path)
         model.to(device)
         model.eval()
 

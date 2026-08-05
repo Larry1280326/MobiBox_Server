@@ -42,6 +42,9 @@ env/
 .env.local
 .env.*.local
 
+# Downloaded models (for offline deployment)
+models/
+
 # Database
 *.db
 *.sqlite3
