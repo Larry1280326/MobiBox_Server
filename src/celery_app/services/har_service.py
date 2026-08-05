@@ -26,6 +26,8 @@ from src.celery_app.config import (
     HAR_IMU_MODEL_CONFIG,
     USE_TSFM_MODEL,
     TSFM_MIN_SAMPLES,
+    USE_SELFSUP_MODEL,
+    SELFSUP_MIN_SAMPLES,
 )
 from src.celery_app.services.processing_state_service import (
     get_last_processed,
@@ -176,8 +178,9 @@ async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
 
     Priority:
     1. TSFM model (if USE_TSFM_MODEL=True and checkpoint available)
-    2. Legacy IMU transformer (if checkpoint configured)
-    3. Mock model (fallback)
+    2. SelfSupEncoder (if USE_SELFSUP_MODEL=True and HF model cached)
+    3. Legacy IMU transformer (if checkpoint configured)
+    4. Mock model (fallback)
 
     Returns:
         Tuple of (label, confidence, source)
@@ -202,13 +205,44 @@ async def run_har_model(imu_data: list[dict]) -> tuple[str, float, str]:
                 logger.info(f"TSFM result: label={label}, confidence={confidence}")
                 return label, confidence, source
             elif not tsfm_available:
-                logger.warning("TSFM model not available, falling back to legacy model")
+                logger.warning("TSFM model not available, falling back to SelfSupEncoder")
             elif len(imu_data) < TSFM_MIN_SAMPLES:
                 logger.warning(f"Not enough samples for TSFM: {len(imu_data)} < {TSFM_MIN_SAMPLES}, falling back")
         except Exception as e:
-            logger.warning(f"TSFM model failed, falling back to legacy: {e}", exc_info=True)
+            logger.warning(f"TSFM model failed, falling back to SelfSupEncoder: {e}", exc_info=True)
     else:
         logger.debug("TSFM model disabled (USE_TSFM_MODEL=False)")
+
+    # Try SelfSupEncoder (if enabled)
+    if USE_SELFSUP_MODEL and len(imu_data) >= SELFSUP_MIN_SAMPLES:
+        try:
+            from .imu_selfsup_service import (
+                run_selfsup_inference,
+                is_selfsup_available,
+            )
+
+            selfsup_available = is_selfsup_available()
+            logger.debug(
+                f"SelfSupEncoder enabled, available: {selfsup_available}, "
+                f"samples: {len(imu_data)}, min_required: {SELFSUP_MIN_SAMPLES}"
+            )
+
+            if selfsup_available:
+                logger.info(f"Running SelfSupEncoder inference with {len(imu_data)} samples")
+                label, confidence, source = run_selfsup_inference(imu_data)
+                logger.info(f"SelfSupEncoder result: label={label}, confidence={confidence}")
+                return label, confidence, source
+            else:
+                logger.warning("SelfSupEncoder model not available, falling back to legacy")
+        except Exception as e:
+            logger.warning(
+                f"SelfSupEncoder failed, falling back to legacy: {e}", exc_info=True
+            )
+    elif USE_SELFSUP_MODEL:
+        logger.debug(
+            f"Not enough samples for SelfSupEncoder: "
+            f"{len(imu_data)} < {SELFSUP_MIN_SAMPLES}"
+        )
 
     # Fall back to legacy IMU transformer
     model, available = _get_imu_model()

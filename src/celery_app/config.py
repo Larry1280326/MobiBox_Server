@@ -28,6 +28,18 @@ ATOMIC_DEBOUNCE_SECONDS = 5  # Minimum time between atomic processing per user
 # TSFM Model Configuration (Time Series Foundation Model)
 # Zero-shot activity recognition with 87+ activity labels
 # =============================================================================
+# =============================================================================
+# SelfSupEncoder Model Configuration (IMU-SelfSupEncoder-v1)
+# Lightweight (~1.4M params) self-supervised ViT for IMU HAR.
+# Downloads from HuggingFace on first use (~5 MB).
+# =============================================================================
+USE_SELFSUP_MODEL = True
+SELFSUP_MIN_SAMPLES = 50  # Minimum IMU samples for SelfSupEncoder (1s @ 50Hz)
+
+# =============================================================================
+# TSFM Model Configuration (Time Series Foundation Model)
+# Zero-shot activity recognition with 87+ activity labels
+# =============================================================================
 # TSFM disabled until checkpoint is downloaded (~400MB).
 # The legacy IMU transformer handles HAR inference reliably.
 # To enable TSFM: download best.pt to src/celery_app/services/tsfm_model/ckpts/
