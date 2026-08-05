@@ -18,7 +18,9 @@ Integration notes:
     with fallback to acceleration-magnitude heuristic
 """
 
+import importlib.util
 import logging
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -78,6 +80,10 @@ SELFSUP_LABEL_MAP = {
 def _load_selfsup_model():
     """Load and cache the SelfSupEncoder model from HuggingFace.
 
+    The model uses a custom architecture (``imu_masked_encoder``) that isn't
+    registered in the standard ``transformers`` library.  We download the
+    ``modeling_imu_encoder.py`` file from the HF repo and import it directly.
+
     Downloads on first call (~5 MB); cached in HF_HUB_CACHE thereafter.
     Set ``HF_HUB_OFFLINE=1`` to use pre-cached model without network.
     """
@@ -87,24 +93,41 @@ def _load_selfsup_model():
         return _selfsup_model, _selfsup_available, _selfsup_device
 
     try:
-        from transformers import AutoModel
+        from huggingface_hub import hf_hub_download
 
         device = torch.device("cpu")
         logger.info("Loading IMU-SelfSupEncoder-v1 from %s ...", SELFSUP_MODEL_ID)
 
-        model = AutoModel.from_pretrained(
+        # Download the custom modeling file from HuggingFace
+        modeling_path = hf_hub_download(
             SELFSUP_MODEL_ID,
-            trust_remote_code=True,
-            torch_dtype=torch.float32,
+            "modeling_imu_encoder.py",
         )
+
+        # Import it dynamically so IMUMaskedEncoder is available
+        spec = importlib.util.spec_from_file_location(
+            "modeling_imu_encoder", modeling_path,
+        )
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("modeling_imu_encoder", mod)
+        spec.loader.exec_module(mod)
+
+        IMUMaskedEncoder = mod.IMUMaskedEncoder
+
+        # Load model weights (uses the same HF cache)
+        model = IMUMaskedEncoder.from_pretrained(SELFSUP_MODEL_ID)
         model.to(device)
         model.eval()
 
+        param_count = sum(p.numel() for p in model.parameters())
         _selfsup_model = model
         _selfsup_available = True
         _selfsup_device = device
 
-        logger.info("IMU-SelfSupEncoder-v1 loaded successfully (device=%s)", device)
+        logger.info(
+            "IMU-SelfSupEncoder-v1 loaded successfully "
+            "(device=%s, params=%d)", device, param_count,
+        )
         return model, True, device
 
     except Exception as exc:
