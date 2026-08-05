@@ -45,11 +45,11 @@ CELERY_BEAT_SCHEDULE = {
     # Summary and intervention generation every 20 minutes
     "hourly-summary": {
         "task": "generate_hourly_summary",
-        "schedule": 1200.0,  # Every 20 minutes
+        "schedule": 60.0,  # Every 1 minute
     },
     "hourly-interventions": {
         "task": "generate_hourly_interventions",
-        "schedule": 1200.0,  # Every 20 minutes
+        "schedule": 60.0,  # Every 1 minute
     },
     "daily-summary": {
         "task": "generate_daily_summary",
