@@ -249,16 +249,152 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 # ---------------------------------------------------------------------------
-# WISDM class prototypes (pre-computed representative feature vectors)
-#
-# These are approximate — we define them by the WISDM label name and use a
-# heuristic fallback.  In production, compute real prototypes from a small
-# set of labelled MobiBox data collected via the /imu_test/predict endpoint.
+# Class prototypes (lazy-built from synthetic data)
 # ---------------------------------------------------------------------------
 
-# Map WISDM label → MobiBox label (subset relevant to 7-class MobiBox output)
-_WISDM_LABEL_INDEX = ["walking", "jogging", "sitting", "standing", "lying",
-                       "sleeping", "upstairs", "downstairs", "unknown"]
+# Activity classes for which we build prototypes
+_PROTOTYPE_LABELS = [
+    "walking", "running", "sitting", "standing", "lying", "climbing stairs",
+]
+
+# Cached prototypes: {label: np.ndarray(192,)}
+_prototypes: Optional[dict] = None
+
+
+def _build_synthetic_imu(label: str, num_samples: int = 500) -> list[dict]:
+    """Generate synthetic 9-ch IMU data for a given activity label.
+
+    Uses simplified physics-based patterns matching real sensor behaviour.
+    Returns ``num_samples`` records at 50 Hz.
+    """
+    records = []
+    for i in range(num_samples):
+        t = i / 50.0  # seconds at 50 Hz
+
+        if label == "walking":
+            ax = np.sin(t * 2.5) * 1.2 + np.random.randn() * 0.1
+            ay = np.cos(t * 2.5) * 0.8 + np.random.randn() * 0.1
+            az = 9.8 + np.sin(t * 5.0) * 1.5 + np.random.randn() * 0.1
+            gx, gy, gz = np.random.randn(3) * 0.05
+
+        elif label == "running":
+            ax = np.sin(t * 3.5) * 3.0 + np.random.randn() * 0.2
+            ay = np.cos(t * 3.5) * 2.0 + np.random.randn() * 0.2
+            az = 9.8 + np.sin(t * 7.0) * 3.0 + np.random.randn() * 0.2
+            gx, gy, gz = np.random.randn(3) * 0.15
+
+        elif label == "sitting":
+            ax = np.random.randn() * 0.05
+            ay = np.random.randn() * 0.05
+            az = 9.8 + np.random.randn() * 0.05
+            gx, gy, gz = np.random.randn(3) * 0.005
+
+        elif label == "standing":
+            ax = np.random.randn() * 0.10 + np.sin(t * 0.3) * 0.05
+            ay = np.random.randn() * 0.10
+            az = 9.8 + np.random.randn() * 0.08
+            gx, gy, gz = np.random.randn(3) * 0.008
+
+        elif label == "lying":
+            ax = np.random.randn() * 0.02
+            ay = 9.8 + np.random.randn() * 0.02  # gravity on Y-axis
+            az = np.random.randn() * 0.02
+            gx, gy, gz = np.random.randn(3) * 0.003
+
+        elif label == "climbing stairs":
+            ax = np.sin(t * 2.0) * 1.5 + np.random.randn() * 0.15
+            ay = np.cos(t * 2.0) * 1.0 + np.random.randn() * 0.15
+            az = 9.8 + np.sin(t * 4.0) * 2.5 + np.random.randn() * 0.15
+            gx, gy, gz = np.random.randn(3) * 0.08
+
+        else:
+            ax = np.random.randn() * 0.1
+            ay = np.random.randn() * 0.1
+            az = 9.8 + np.random.randn() * 0.1
+            gx, gy, gz = np.random.randn(3) * 0.01
+
+        records.append({
+            "acc_X": float(ax), "acc_Y": float(ay), "acc_Z": float(az),
+            "gyro_X": float(gx), "gyro_Y": float(gy), "gyro_Z": float(gz),
+            "mag_X": 30.0 + np.random.randn() * 2,
+            "mag_Y": -10.0 + np.random.randn() * 2,
+            "mag_Z": 40.0 + np.random.randn() * 2,
+        })
+    return records
+
+
+def _build_prototypes(num_augments: int = 10) -> dict:
+    """Build per-class prototype embeddings from synthetic data.
+
+    Generates ``num_augments`` synthetic windows per activity class,
+    extracts embeddings, and averages them into a single 192-dim prototype.
+    Results are cached in memory.
+
+    Returns:
+        ``{label: np.ndarray(192,)}`` dictionary.
+    """
+    global _prototypes
+
+    if _prototypes is not None:
+        return _prototypes
+
+    logger.info("Building SelfSupEncoder class prototypes from synthetic data...")
+    prototypes = {}
+
+    for label in _PROTOTYPE_LABELS:
+        embeddings = []
+        for seed in range(num_augments):
+            np.random.seed(seed)
+            imu_data = _build_synthetic_imu(label, num_samples=500)
+            emb = get_selfsup_embedding(imu_data)
+            if emb is not None:
+                embeddings.append(emb)
+
+        if embeddings:
+            proto = np.mean(embeddings, axis=0)
+            # L2-normalize the prototype
+            proto = proto / (np.linalg.norm(proto) + 1e-8)
+            prototypes[label] = proto
+            logger.debug("  %s: %d samples, norm=%.4f", label, len(embeddings), np.linalg.norm(proto))
+        else:
+            logger.warning("  %s: no embeddings extracted, skipping", label)
+
+    _prototypes = prototypes
+    logger.info("Built %d class prototypes", len(prototypes))
+    return prototypes
+
+
+def _classify_embedding(emb: np.ndarray) -> tuple[str, float]:
+    """Classify a 192-dim embedding using cosine similarity to prototypes.
+
+    Returns:
+        (label, confidence) where confidence is the softmax probability
+        of the best-matching prototype.
+    """
+    prototypes = _build_prototypes()
+
+    if not prototypes:
+        return "unknown", 0.5
+
+    # Normalize embedding
+    emb_norm = emb / (np.linalg.norm(emb) + 1e-8)
+
+    # Cosine similarity to each prototype
+    scores = {}
+    for label, proto in prototypes.items():
+        scores[label] = float(np.dot(emb_norm, proto))
+
+    # Softmax for confidence calibration
+    score_values = np.array(list(scores.values()))
+    score_values = np.clip(score_values, -10, 10)  # avoid overflow
+    probs = np.exp(score_values * 10.0)  # temperature-scaled
+    probs = probs / probs.sum()
+
+    best_idx = int(np.argmax(probs))
+    best_label = list(scores.keys())[best_idx]
+    confidence = float(probs[best_idx])
+
+    return best_label, round(confidence, 2)
 
 
 def run_selfsup_inference(imu_data: list[dict]) -> tuple[str, float, str]:
@@ -280,16 +416,13 @@ def run_selfsup_inference(imu_data: list[dict]) -> tuple[str, float, str]:
         label, confidence = _heuristic_predict(imu_data)
         return label, confidence, "selfsup_heuristic"
 
-    # Cosine-similarity nearest-prototype classifier.
-    # We're using the raw embedding. Since we don't have labelled prototypes
-    # yet, we fall back to a magnitude-based heuristic. Once enough labelled
-    # data is collected, replace this block with prototype-based classification.
-    #
-    # TODO: collect labelled embeddings from /imu_test/predict and build
-    #       per-class prototypes for cosine-similarity classification.
-
-    label, confidence = _heuristic_predict(imu_data)
-    return label, confidence, "selfsup_embedding"
+    try:
+        label, confidence = _classify_embedding(emb)
+        return label, confidence, "selfsup_model"
+    except Exception as exc:
+        logger.warning("Prototype classification failed: %s, using heuristic", exc)
+        label, confidence = _heuristic_predict(imu_data)
+        return label, confidence, "selfsup_heuristic"
 
 
 def _heuristic_predict(imu_data: list[dict]) -> tuple[str, float]:
