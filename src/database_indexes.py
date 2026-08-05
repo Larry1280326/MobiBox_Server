@@ -89,12 +89,6 @@ async def ensure_indexes(db: AsyncIOMotorDatabase):
     # ── user_processing_state ─────────────────────────────
     # _id is the user name (natural key, already indexed by default)
 
-    # ── archival_logs ─────────────────────────────────────
-    await db["archival_logs"].create_index(
-        [("table_name", 1), ("archival_timestamp", -1)],
-        name="idx_archival_table_timestamp",
-    )
-
     # ── imu_test_results ──────────────────────────────────
     await db["imu_test_results"].create_index("user", name="idx_imu_test_user")
     await db["imu_test_results"].create_index(

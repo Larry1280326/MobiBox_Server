@@ -149,7 +149,7 @@ tmux send-keys -t "$SESSION:worker" \
 tmux send-keys -t "$SESSION:worker" \
     "echo ''" Enter
 tmux send-keys -t "$SESSION:worker" \
-    "celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary,archive 2>&1" Enter
+    "celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary 2>&1" Enter
 
 # ── Window 2: Celery Beat ──────────────────────────────────────────────────
 

@@ -49,7 +49,7 @@ docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 
 # Celery worker
-celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary,archive
+celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary
 
 # Celery beat (scheduler)
 celery -A src.celery_app.celery_app beat --loglevel=info
@@ -253,7 +253,6 @@ IMU Upload                 Document Upload
 | `summary_log_feedbacks` | — | User feedback on summaries |
 | `app_categories` | — | App-name → category cache |
 | `user_processing_state` | — | Per-user processing timestamps |
-| `archival_logs` | — | Archival operation audit trail |
 | `imu_test_results` | — | IMU prediction test results |
 
 Indexes (including TTL expiry) are created automatically at startup by `database_indexes.py`.
@@ -277,11 +276,9 @@ Indexes (including TTL expiry) are created automatically at startup by `database
 | Hourly Summary | Beat scheduler | Every 20 min |
 | Hourly Intervention | Beat scheduler | Every 20 min |
 | Daily Summary | Beat scheduler | Midnight |
-| Data Archival | Beat scheduler | 3 AM daily |
-
 ```bash
 # Start worker
-celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary,archive
+celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary
 
 # Start scheduler
 celery -A src.celery_app.celery_app beat --loglevel=info
@@ -345,11 +342,9 @@ Logs are written to `logs/` with Python `RotatingFileHandler` (10 MB × 5 backup
 ## Testing
 
 ```bash
-# All unit tests (85 tests, ~1 s)
+# All unit tests (~65 tests, <1 s)
 pytest src/test/ -v \
   --ignore=src/test/test_llm_integration.py \
-  --ignore=src/test/test_archive_service_integration.py \
-  --ignore=src/test/test_archive_storage_integration.py \
   --ignore=src/test/test_intervention_pipeline_integration.py
 
 # LLM integration tests (requires OPENROUTER_API_KEY)
@@ -364,11 +359,8 @@ pytest src/test/test_llm_integration.py -v -m integration
 | `test_query.py` | Query API endpoints |
 | `test_celery_services.py` | HAR, atomic, summary, intervention services |
 | `test_celery_tasks.py` | Celery task definitions |
-| `test_archive_service.py` | Archival service (mocked) |
 | `test_llm_utils.py` | LLM utilities (mocked) |
 | `test_llm_integration.py` | LLM integration (real API) |
-| `test_archive_service_integration.py` | Archival integration (real DB) |
-| `test_archive_storage_integration.py` | Storage upload (real DB) |
 | `test_intervention_pipeline_integration.py` | Intervention pipeline |
 
 ### Fixtures (`conftest.py`)
@@ -396,7 +388,6 @@ MobiBox_Server/
 │   └── test_selfsup_model.py
 ├── models/                     # Offline model cache (gitignored)
 ├── logs/                       # Rotating log files
-├── archives/                   # Parquet archival output
 ├── docs/
 │   └── mongodb-access.md
 ├── src/
@@ -414,36 +405,13 @@ MobiBox_Server/
 │   ├── celery_app/
 │   │   ├── celery_app.py       # Celery instance + beat schedule
 │   │   ├── config.py           # Model config, windows, thresholds
-│   │   ├── tasks/              # har_tasks, atomic_tasks, summary_tasks, archive_tasks
+│   │   ├── tasks/              # har_tasks, atomic_tasks, summary_tasks
 │   │   ├── services/           # har_service, atomic_service, summary_service,
-│   │   │                       # intervention_service, archive_service,
-│   │   │                       # imu_selfsup_service, app_category_service,
-│   │   │                       # processing_state_service
+│   │   │                       # intervention_service, imu_selfsup_service,
+│   │   │                       # app_category_service, processing_state_service
 │   │   └── schemas/            # HAR + atomic activity Pydantic schemas
 │   └── test/                   # pytest test suite
 └── .gitignore
-```
-
----
-
-## Data Archival
-
-Old records are exported to compressed Parquet files (Snappy) and deleted from
-MongoDB. Runs daily at 3 AM.
-
-```
-./archives/
-├── imu/2026/03/2026-03-01.parquet
-├── har/2026/03/2026-03-01.parquet
-└── ...
-```
-
-Configuration:
-
-```env
-ARCHIVE_DIR=./archives
-ARCHIVE_ENABLED=true
-ARCHIVE_BATCH_SIZE=10000
 ```
 
 ---
