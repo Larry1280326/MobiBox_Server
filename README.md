@@ -1,132 +1,100 @@
 # MobiBox Backend
 
-A FastAPI-based backend server for MobiBox with MongoDB, Celery task processing, and LLM-powered health interventions.
+A FastAPI-based backend for the MobiBox behavioral monitoring study (HKUST).
+Processes IMU sensor data with an ML activity recognition model, generates
+LLM-powered health interventions and summaries, and serves them to the Android
+companion app via a REST API.
 
-> **Note:** The backend was migrated from Supabase (PostgreSQL) to MongoDB in July 2025. All data is stored in MongoDB collections with TTL indexes for automatic retention management. The test suite uses MongoDB mocks — see [Testing](#testing) for details.
+## Architecture
+
+```
+Android App ──HTTP──▶ FastAPI (port 8000) ──▶ MongoDB
+                           │
+                    ┌──────┴──────┐
+                    ▼             ▼
+               RabbitMQ      Celery Worker
+               (queue)       ├─ HAR (SelfSupEncoder)
+                             ├─ Atomic Activities
+                             ├─ Summaries (LLM)
+                             └─ Interventions (LLM)
+                              ▲
+                       Celery Beat (scheduler)
+```
 
 ## Quick Start
 
-### 1. Install Dependencies
-
 ```bash
-# Create and activate conda environment
+# 1. Create environment
 conda env create -f environment.yml
 conda activate Mobibox_backend
-```
 
-### 2. Configure Environment
-
-```bash
-# Copy example environment file
+# 2. Configure
 cp .env.example .env
+# Edit .env with your MongoDB URL and OpenRouter API key
 
-# Edit .env with your credentials (see Configuration section below)
-```
+# 3. Start services (recommended: tmux)
+./scripts/tmux_start.sh
 
-### 3. Start All Services (Recommended)
-
-Use the provided startup scripts to manage all services:
-
-```bash
-# Start all services (RabbitMQ, FastAPI, Celery worker, Celery beat)
-./scripts/start_services.sh
-
-# Check service status
-./scripts/status.sh
-
-# Stop all services
-./scripts/stop_services.sh
-
-# Restart all services
-./scripts/restart_services.sh
-```
-
-### 4. Verify Services
-
-```bash
-# Check API health
+# 4. Verify
 curl http://localhost:8000/health
-
-# Check all service statuses
-./scripts/status.sh
 ```
 
-### Manual Start (Alternative)
-
-If you prefer to start services manually:
+**Manual start** (if not using scripts):
 
 ```bash
-# Start RabbitMQ (required for Celery)
+# Infrastructure
 docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 
-# Terminal 1: FastAPI Server
-conda activate Mobibox_backend
+# API server
 uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 
-# Terminal 2: Celery Worker (for async tasks)
-conda activate Mobibox_backend
+# Celery worker
 celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary,archive
 
-# Terminal 3: Celery Beat (for scheduled tasks - optional)
-conda activate Mobibox_backend
+# Celery beat (scheduler)
 celery -A src.celery_app.celery_app beat --loglevel=info
 ```
 
 ---
 
-## Environment Setup
-
-### Prerequisites
+## Prerequisites
 
 | Requirement | Purpose |
 |-------------|---------|
-| [Conda](https://docs.conda.io/en/latest/miniconda.html) | Python environment management |
-| Python 3.11 | Runtime environment |
-| [Docker](https://www.docker.com/) | Running RabbitMQ |
-| [MongoDB](https://www.mongodb.com/) | Database backend (local or Atlas) |
-| [OpenRouter](https://openrouter.ai/) API | LLM integration for interventions |
+| Python 3.11 + [Conda](https://docs.conda.io/en/latest/miniconda.html) | Runtime |
+| [MongoDB](https://www.mongodb.com/) | Database (local or Atlas) |
+| [Docker](https://www.docker.com/) | RabbitMQ message broker |
+| [OpenRouter](https://openrouter.ai/) API key | LLM-powered interventions & summaries |
+| tmux (optional) | Process management on servers |
 
-### Configuration
+---
 
-Copy `.env.example` to `.env` and configure the following:
+## Configuration
 
-```bash
-cp .env.example .env
-```
+Copy `.env.example` to `.env` and configure:
 
-#### MongoDB Configuration
-
-1. Install and start MongoDB locally, or create a cluster at https://www.mongodb.com/atlas
-2. Update `.env` with your MongoDB connection:
+### MongoDB
 
 ```env
 MONGODB_URL=mongodb://localhost:27017
 MONGODB_DB_NAME=mobibox
 ```
 
-#### OpenRouter LLM Configuration (for LLM features)
-
-1. Get your OpenRouter API key from [OpenRouter Keys](https://openrouter.ai/keys)
-2. Update `.env`:
+### LLM (OpenRouter)
 
 ```env
-OPENROUTER_API_KEY=your-api-key-here
+OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=qwen/qwen3.5-flash-02-23
+OPENROUTER_MODEL=google/gemma-4-26b-a4b-it:free
 DEFAULT_TEMPERATURE=0.1
 ```
 
-**Free Models Available:**
-- `qwen/qwen3.5-flash-02-23` (recommended — fast, free)
-- `meta-llama/llama-3.2-3b-instruct:free`
-- `google/gemma-2-9b-it:free`
-- `mistralai/mistral-7b-instruct:free`
+The current default is `google/gemma-4-26b-a4b-it:free` — a free model with
+native structured-output support, suitable for generating health interventions
+and activity summaries. Other free options:
+`meta-llama/llama-3.3-70b-instruct:free`, `mistralai/mistral-7b-instruct:free`.
 
-See [OpenRouter Models](https://openrouter.ai/models) for all available models.
-
-#### RabbitMQ / Celery Configuration
-
-Default configuration works for local development:
+### RabbitMQ / Celery
 
 ```env
 RABBITMQ_URL=amqp://guest:guest@localhost:5672//
@@ -134,1194 +102,370 @@ CELERY_BROKER_URL=amqp://guest:guest@localhost:5672//
 CELERY_RESULT_BACKEND=rpc://
 ```
 
-#### Baidu Maps Configuration (Optional)
-
-For GPS-to-location reverse geocoding:
+### Baidu Maps (optional)
 
 ```env
-BAIDU_MAPS_API_KEY=your-baidu-api-key
+BAIDU_MAPS_API_KEY=your-key
 BAIDU_MAPS_ENABLED=true
 ```
 
-If not configured, the system falls back to using provided address/POI data.
-
-### Create and Activate Environment
-
-#### Option 1: Create from YAML file (Recommended)
-
-```bash
-# Create the conda environment from the YAML file
-conda env create -f environment.yml
-
-# Activate the environment
-conda activate Mobibox_backend
-```
-
-#### Option 2: Create manually
-
-```bash
-# Create a new conda environment with Python 3.11
-conda create -n Mobibox_backend python=3.11
-
-# Activate the environment
-conda activate Mobibox_backend
-
-# Install dependencies
-pip install fastapi "uvicorn[standard]" pydantic pydantic-settings motor pymongo "python-jose[cryptography]" "passlib[bcrypt]" python-multipart httpx aiohttp pytest pytest-asyncio python-dotenv pyyaml orjson black isort flake8 mypy celery pyarrow torch numpy sentence-transformers
-```
-
-### Verify Installation
-
-```bash
-# Activate the environment
-conda activate Mobibox_backend
-
-# Check Python version
-python --version
-
-# Verify FastAPI is installed
-python -c "import fastapi; print(f'FastAPI version: {fastapi.__version__}')"
-
-# Test MongoDB connection
-python -c "from src.config import get_settings; print('Settings loaded:', get_settings().app_name)"
-```
-
-### Deactivate Environment
-
-```bash
-conda deactivate
-```
-
-### Export Environment (for sharing)
-
-If you add new packages and want to update the YAML file:
-
-```bash
-# Export the current environment to a YAML file
-conda env export > environment.yml
-
-# Or export only the packages you explicitly installed (no build info)
-pip freeze > requirements.txt
-```
-
-### Remove Environment
-
-```bash
-# Remove the environment completely
-conda env remove -n Mobibox_backend
-```
-
-## Running the Server
-
-### Service Architecture
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   FastAPI       │     │   RabbitMQ      │     │   MongoDB       │
-│   (Port 8000)   │────▶│   (Port 5672)   │     │   (Port 27017)  │
-│                 │     │                 │     │                 │
-│  REST API       │     │  Message Queue  │     │  Database       │
-└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │                       │                       │
-         │                       ▼                       │
-         │              ┌─────────────────┐              │
-         │              │  Celery Worker  │──────────────┘
-         │              │                 │
-         │              │  - HAR Tasks    │
-         │              │  - Atomic Tasks │
-         │              │  - Summaries    │
-         │              └─────────────────┘
-         │                       ▲
-         │              ┌─────────────────┐
-         └──────────────│  Celery Beat    │
-                        │  (Scheduler)    │
-                        │                 │
-                        │  - Hourly tasks │
-                        │  - Daily tasks  │
-                        └─────────────────┘
-```
-
-### Starting Services
-
-#### Step 1: Start RabbitMQ (Required)
-
-```bash
-# Start RabbitMQ container
-docker run -d --name rabbitmq -p 5672:5672 rabbitmq
-
-# To stop RabbitMQ
-docker stop rabbitmq
-
-# To restart RabbitMQ
-docker start rabbitmq
-
-# To remove RabbitMQ container
-docker rm -f rabbitmq
-```
-
-#### Step 2: Start FastAPI Server
-
-```bash
-conda activate Mobibox_backend
-
-# Development mode with auto-reload
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
-
-# Production mode
-uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-The API will be available at http://localhost:8000
-
-#### Step 3: Start Celery Worker (Required for async tasks)
-
-```bash
-conda activate Mobibox_backend
-
-# Start worker with default concurrency
-celery -A src.celery_app.celery_app worker --loglevel=info
-
-# Start with specific concurrency
-celery -A src.celery_app.celery_app worker --loglevel=info --concurrency=4
-
-# Start with specific queues
-celery -A src.celery_app.celery_app worker --loglevel=info -Q har,atomic,summary
-```
-
-#### Step 4: Start Celery Beat (Optional - for scheduled tasks)
-
-```bash
-conda activate Mobibox_backend
-
-# Start beat scheduler
-celery -A src.celery_app.celery_app beat --loglevel=info
-```
-
-**Scheduled Tasks:**
-| Task | Schedule | Description |
-|------|----------|-------------|
-| `generate_hourly_interventions` | Every 20 min | Generate health interventions |
-| `generate_hourly_summary` | Every 20 min | Generate hourly activity summary |
-| `generate_daily_summary` | Daily at midnight | Generate daily activity summary |
-| `archive_data_periodic` | Daily at 3 AM | Archive old data to Parquet |
-
-### Running Multiple Services Together
-
-Use multiple terminal windows or a process manager:
-
-#### Option 1: Multiple Terminals
-
-```bash
-# Terminal 1: API Server
-uvicorn src.main:app --reload
-
-# Terminal 2: Celery Worker
-celery -A src.celery_app.celery_app worker --loglevel=info
-
-# Terminal 3: Celery Beat (optional)
-celery -A src.celery_app.celery_app beat --loglevel=info
-```
-
-#### Option 2: Using tmux (recommended for development)
-
-```bash
-# Create a new tmux session
-tmux new -s mobibox
-
-# Start API server
-uvicorn src.main:app --reload
-
-# Split pane: Ctrl+b %
-# Start Celery worker in new pane
-celery -A src.celery_app.celery_app worker --loglevel=info
-
-# Split pane again: Ctrl+b %
-# Start Celery beat (optional)
-celery -A src.celery_app.celery_app beat --loglevel=info
-
-# Detach: Ctrl+b d
-# Reattach: tmux attach -t mobibox
-```
-
-#### Option 3: Background Mode
-
-```bash
-# Start services in background
-uvicorn src.main:app --port 8000 &
-celery -A src.celery_app.celery_app worker --loglevel=info &
-celery -A src.celery_app.celery_app beat --loglevel=info &
-
-# View logs
-tail -f nohup.out
-
-# Stop all background processes
-pkill -f "uvicorn\|celery"
-```
-
-### Verification
-
-```bash
-# Check API is running
-curl http://localhost:8000/health
-# Expected with MongoDB: {"status": "healthy", "mongodb": "up"}
-# Without MongoDB: {"status": "unhealthy", "mongodb": "down"} (server still runs)
-
-# Check MongoDB connection
-curl http://localhost:8000/mongodb-test
-
-# Check Celery worker is running
-celery -A src.celery_app.celery_app inspect active
-# Expected: -> celery@hostname: OK
-
-# Check registered tasks
-celery -A src.celery_app.celery_app inspect registered
-```
-
-### Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| `Connection refused` to RabbitMQ | Ensure RabbitMQ is running: `docker ps \| grep rabbitmq` |
-| Celery tasks not executing | Check worker logs for errors, verify environment variables |
-| LLM errors | Verify `OPENROUTER_API_KEY` in `.env` |
-| MongoDB connection errors | Verify `MONGODB_URL` in `.env` and ensure MongoDB is running: `mongosh --eval "db.runCommand({ping:1})"` |
-| Port 8000 already in use | Kill existing process: `lsof -i :8000` then `kill -9 <PID>` |
-| Integration tests skipped | Set `OPENROUTER_API_KEY` in `.env` |
+---
 
 ## API Endpoints
 
-### Health Check
-- `GET /health` - Returns `{"status": "healthy"}`
+### Health
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check — pings MongoDB |
+| `GET` | `/mongodb-test` | Direct MongoDB connection test |
 
-### MongoDB Connection Test
-- `GET /mongodb-test` - Tests MongoDB connection
+### Registration
+| Method | Path | Body |
+|--------|------|------|
+| `POST` | `/register` | `{"name": "username"}` |
 
-### User Registration
-- `POST /register` - Register a new user
-  ```json
-  {
-    "name": "unique_username"
-  }
-  ```
-
-**Important:** User IDs (`user` field) are **strings**, not integers. All API endpoints that accept a `user` parameter expect a string identifier (e.g., `"samsung_test"`, `"user123"`). This applies to:
-- Upload endpoints (`/upload/documents`, `/upload/imu`)
-- Query endpoints (`/get_summary_log`, `/get_intervention`)
-- Feedback endpoints (`/send_log_feedback`, `/send_intervention_feedback`)
+User IDs are **strings**, not integers. Applies to all endpoints below.
 
 ### Data Upload
-- `POST /upload/documents` - Bulk upload document data
-  ```json
-  {
-    "items": [
-      {
-        "user": "username",
-        "timestamp": "2024-01-01T00:00:00Z",
-        "volume": 80,
-        "screen_on_ratio": 0.5,
-        "wifi_connected": true,
-        "wifi_ssid": "MyWiFi",
-        "network_traffic": 1024.5,
-        "Rx_traffic": 512.0,
-        "Tx_traffic": 512.5,
-        "stepcount_sensor": 1500,
-        "gpsLat": 37.7749,
-        "gpsLon": -122.4194,
-        "battery": 85,
-        "current_app": "com.example.app",
-        "bluetooth_devices": ["device1", "device2"],
-        "address": "123 Main St",
-        "poi": ["Coffee Shop", "Restaurant"],
-        "nearbyBluetoothCount": 3,
-        "topBluetoothDevices": ["device1", "device2", "device3"]
-      }
-    ]
-  }
-  ```
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/upload/documents` | Bulk upload sensor/survey data (17 fields: volume, screen_on_ratio, wifi, gps, battery, current_app, bluetooth, etc.) |
+| `POST` | `/upload/imu` | Bulk upload IMU data (9 channels: acc XYZ + gyro XYZ + mag XYZ) |
 
-- `POST /upload/imu` - Bulk upload IMU sensor data
-  ```json
-  {
-    "items": [
-      {
-        "user": "username",
-        "timestamp": "2024-01-01T00:00:00Z",
-        "acc_X": 0.1,
-        "acc_Y": -0.2,
-        "acc_Z": 9.8,
-        "gyro_X": 0.01,
-        "gyro_Y": -0.02,
-        "gyro_Z": 0.03,
-        "mag_X": 1.0,
-        "mag_Y": 2.0,
-        "mag_Z": 3.0
-      }
-    ]
-  }
-  ```
+Uploads trigger Celery HAR and atomic-activity processing.
 
-### Query Endpoints
+### Query
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/get_summary_log` | Latest hourly/daily summary with polling support |
+| `POST` | `/get_intervention` | Latest health intervention |
+| `POST` | `/get_compressed_atomic_activities` | Grouped activity labels by dimension |
+| `POST` | `/get_encoded_atomic_activities` | Level-1 (temporal) + Level-2 (aggregated) encoded activities |
+| `POST` | `/send_intervention_feedback` | Submit feedback on an intervention (6 MC + text) |
+| `POST` | `/send_log_feedback` | Submit feedback on a summary log |
 
-- `POST /get_summary_log` - Fetch the most recent summary log for a user
-  ```json
-  {
-    "user": "username",
-    "log_type": "hourly"  // or "daily"
-  }
-  ```
+### IMU Test
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/imu_test/predict` | Predict activity from IMU data (min 50 samples) |
+| `GET` | `/imu_test/statistics` | Accuracy statistics per label |
+| `GET` | `/imu_test/labels` | Valid activity labels |
 
-- `POST /get_intervention` - Fetch the most recent intervention for a user
-  ```json
-  {
-    "user": "username"
-  }
-  ```
+Full API reference: `http://localhost:8000/docs` (Swagger UI).
 
-- `POST /send_intervention_feedback` - Submit feedback for an intervention
-  ```json
-  {
-    "user": "username",
-    "intervention_id": "507f1f77bcf86cd799439011",
-    "feedback": "This intervention was helpful",
-    "mc1": "Strongly agree",
-    "mc2": "Agree",
-    "mc3": "Neutral",
-    "mc4": "Disagree",
-    "mc5": "Strongly disagree",
-    "mc6": "Not applicable"
-  }
-  ```
+---
 
-- `POST /send_log_feedback` - Submit feedback for a summary log
-  ```json
-  {
-    "user": "username",
-    "summary_logs_id": "507f1f77bcf86cd799439011",
-    "feedback": "The summary was accurate"
-  }
-  ```
+## HAR Model — IMU-SelfSupEncoder-v1
+
+Human Activity Recognition is powered by
+**[IMU-SelfSupEncoder-v1](https://huggingface.co/NikoKKK/IMU-SelfSupEncoder-v1)**,
+a lightweight (1.6M params) self-supervised Vision Transformer trained on the
+WISDM dataset. It classifies 6 IMU channels (acc + gyro) into 7 activity labels.
+
+| Property | Value |
+|----------|-------|
+| Model | `NikoKKK/IMU-SelfSupEncoder-v1` (HuggingFace) |
+| Architecture | ViT-style Conv-stem + time-frequency fusion |
+| Parameters | 1.6 M |
+| Input | 6-channel (acc XYZ + gyro XYZ), 200 timesteps @ 20 Hz |
+| Output | 192-dim CLS embedding → prototype-based classifier |
+| Classes | walking, running, sitting, standing, lying, climbing stairs, unknown |
+| Inference | ~3 ms on CPU (~340 inferences/sec) |
+| Size on disk | ~5 MB |
+
+### Fallback chain
+
+```
+SelfSupEncoder (prototype classifier)
+        │
+        ▼ (if model unavailable or < 50 samples)
+Mock model (acceleration-magnitude heuristic)
+```
+
+### Offline deployment (China servers)
+
+The model downloads from HuggingFace on first use. For servers without internet:
+
+```bash
+# On a machine WITH internet:
+python scripts/download_selfsup_model.py
+# → downloads to models/imu_selfsup/ (~5 MB)
+
+# Copy to server:
+scp -r models/imu_selfsup user@server:~/MobiBox_Server/models/imu_selfsup
+```
+
+The service auto-detects `models/imu_selfsup/` and loads locally — no network needed.
+
+### Testing the model
+
+```bash
+python scripts/test_selfsup_model.py          # full evaluation
+python scripts/test_selfsup_model.py --quick  # download + basic checks
+```
+
+---
+
+## Data Pipeline
+
+```
+IMU Upload                 Document Upload
+    │                            │
+    ▼                            ▼
+[imu collection]          [uploads collection]
+    │                            │
+    ▼ (Celery: HAR)              ▼ (Celery: Atomic)
+[har collection]          [atomic_activities collection]
+                               │
+                               ▼ (Celery: 20 min + daily)
+                          LLM Summary Generation
+                               │
+                               ▼
+                          [summary_logs collection]
+                               │
+                               ▼ (Celery: 20 min)
+                          LLM Intervention Generation
+                               │
+                               ▼
+                          [interventions collection]
+                               │
+                               ▼
+                      Android polls /get_summary_log
+                           and /get_intervention
+```
+
+---
+
+## Database (MongoDB)
+
+### Collections
+
+| Collection | TTL | Purpose |
+|-----------|-----|---------|
+| `users` | — | User registration |
+| `uploads` | 30 days | Sensor/survey data |
+| `imu` | 7 days | Raw IMU readings |
+| `har` | 30 days | Activity labels + confidence |
+| `atomic_activities` | 30 days | 7-dimension activity labels |
+| `summary_logs` | 90 days | LLM-generated summaries |
+| `interventions` | 90 days | LLM-generated health interventions |
+| `intervention_feedbacks` | — | User feedback on interventions |
+| `summary_log_feedbacks` | — | User feedback on summaries |
+| `app_categories` | — | App-name → category cache |
+| `user_processing_state` | — | Per-user processing timestamps |
+| `archival_logs` | — | Archival operation audit trail |
+| `imu_test_results` | — | IMU prediction test results |
+
+Indexes (including TTL expiry) are created automatically at startup by `database_indexes.py`.
+
+### Key document shapes
+
+**imu**: `user`, `timestamp`, `acc_X/Y/Z`, `gyro_X/Y/Z`, `mag_X/Y/Z`
+**har**: `user`, `timestamp`, `har_label`, `confidence`, `source` (`selfsup_model` \| `mock_har` \| `selfsup_insufficient`)
+**atomic_activities**: `user`, `timestamp`, `har_label`, `app_category`, `app_name`, `step_count`, `phone_usage`, `social`, `movement`, `location`
+**interventions**: `user`, `timestamp`, `intervention_content`, `start_timestamp`, `end_timestamp`
+**summary_logs**: `user`, `log_type`, `summary`, `start_timestamp`, `end_timestamp`, `timestamp`
+
+---
+
+## Celery Tasks
+
+| Pipeline | Trigger | Schedule |
+|----------|---------|----------|
+| HAR Processing | IMU upload | Every 2 s (periodic) |
+| Atomic Activities | Document upload | Every 10 s (periodic) |
+| Hourly Summary | Beat scheduler | Every 20 min |
+| Hourly Intervention | Beat scheduler | Every 20 min |
+| Daily Summary | Beat scheduler | Midnight |
+| Data Archival | Beat scheduler | 3 AM daily |
+
+```bash
+# Start worker
+celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary,archive
+
+# Start scheduler
+celery -A src.celery_app.celery_app beat --loglevel=info
+
+# Manual trigger
+celery -A src.celery_app.celery_app call process_har_batch --args='["user1"]'
+```
+
+---
+
+## LLM Integration
+
+Summaries and interventions are generated via OpenRouter's OpenAI-compatible API
+using `langchain-openai`. The `src/llm_utils/services.py` module provides:
+
+| Function | Use |
+|----------|-----|
+| `query_llm()` | Simple text generation |
+| `generate_structured_output()` | Pydantic schema-constrained JSON output |
+| `summarize_long_text()` | Chunked summarization |
+| `get_llm()` | Configured `ChatOpenAI` instance |
+
+Built-in rate limiting: 60 requests/minute.
+
+---
+
+## Service Management
+
+### tmux (recommended for servers)
+
+```bash
+./scripts/tmux_start.sh      # Start all services in tmux session 'mobibox'
+./scripts/tmux_attach.sh     # Attach to view live output
+./scripts/tmux_status.sh     # Check health of all services
+./scripts/tmux_stop.sh       # Stop everything
+```
+
+Session layout: `api` | `worker` | `beat` | `logs` (3-pane live monitor)
+
+### nohup (alternative)
+
+```bash
+./scripts/start_services.sh
+./scripts/status.sh
+./scripts/stop_services.sh
+./scripts/restart_services.sh
+```
+
+### Logs
+
+Logs are written to `logs/` with Python `RotatingFileHandler` (10 MB × 5 backups):
+
+| File | Service |
+|------|---------|
+| `logs/api.log` | FastAPI |
+| `logs/celery_worker.log` | Celery worker |
+| `logs/celery_beat.log` | Celery beat |
+
+---
 
 ## Testing
 
-### Run Test Suite
-
 ```bash
-conda activate Mobibox_backend
-
-# Run all unit tests (131 tests, < 2 seconds)
+# All unit tests (85 tests, ~1 s)
 pytest src/test/ -v \
   --ignore=src/test/test_llm_integration.py \
   --ignore=src/test/test_archive_service_integration.py \
   --ignore=src/test/test_archive_storage_integration.py \
   --ignore=src/test/test_intervention_pipeline_integration.py
 
-# Run with verbose output
-pytest -v
-
-# Run specific test file
-pytest src/test/test_celery_services.py
-
-# Run specific test class
-pytest src/test/test_celery_services.py::TestSummaryService -v
-```
-
-### Test Categories
-
-| Test File | Description |
-|-----------|-------------|
-| `test_upload.py` | API endpoint tests |
-| `test_llm_utils.py` | LLM service unit tests (mocked) |
-| `test_llm_integration.py` | LLM integration tests (real API calls) |
-| `test_celery_services.py` | Celery service tests |
-| `test_celery_tasks.py` | Celery task tests |
-| `test_archive_service.py` | Archival service unit tests (mocked) |
-| `test_archive_service_integration.py` | Archival integration tests (real DB) |
-| `test_archive_storage_integration.py` | Local archival integration tests |
-| `test_query.py` | Query endpoint tests |
-| `test_tsfm.py` | TSFM model tests |
-| `test_intervention_pipeline_integration.py` | Intervention pipeline tests |
-
-### Unit Tests vs Integration Tests
-
-**Unit Tests** (fast, mocked):
-```bash
-# Run unit tests only (skip integration tests)
-pytest -v --ignore=src/test/test_llm_integration.py \
-           --ignore=src/test/test_archive_service_integration.py \
-           --ignore=src/test/test_archive_storage_integration.py
-```
-
-**Integration Tests** (require real credentials):
-```bash
-# Run integration tests only
-pytest -v -m integration
-
-# Requires:
-# - OPENROUTER_API_KEY in .env (for LLM tests)
-# - MONGODB_URL in .env (for DB tests)
-```
-
-### Test Fixtures
-
-The `conftest.py` file provides common fixtures:
-
-| Fixture | Description |
-|---------|-------------|
-| `mongodb_mock` | Mock MongoDB database with auto-creating collection mocks |
-| `client` | FastAPI test client with mocked MongoDB and Celery |
-| `mock_get_database` | Patch `get_database()` for non-HTTP Celery service tests |
-
-### Running Specific Test Categories
-
-#### LLM Tests
-```bash
-# Unit tests (mocked, no API key needed)
-pytest src/test/test_llm_utils.py -v
-
-# Integration tests (requires OPENROUTER_API_KEY)
+# LLM integration tests (requires OPENROUTER_API_KEY)
 pytest src/test/test_llm_integration.py -v -m integration
 ```
 
-#### Archival Tests
-```bash
-# Unit tests (mocked, no MongoDB needed)
-pytest src/test/test_archive_service.py -v
+### Test files
 
-# Integration tests (requires MongoDB)
-pytest src/test/test_archive_service_integration.py -v -m integration
+| File | Description |
+|------|-------------|
+| `test_upload.py` | Upload API endpoints |
+| `test_query.py` | Query API endpoints |
+| `test_celery_services.py` | HAR, atomic, summary, intervention services |
+| `test_celery_tasks.py` | Celery task definitions |
+| `test_archive_service.py` | Archival service (mocked) |
+| `test_llm_utils.py` | LLM utilities (mocked) |
+| `test_llm_integration.py` | LLM integration (real API) |
+| `test_archive_service_integration.py` | Archival integration (real DB) |
+| `test_archive_storage_integration.py` | Storage upload (real DB) |
+| `test_intervention_pipeline_integration.py` | Intervention pipeline |
 
-# Local archival tests
-pytest src/test/test_archive_storage_integration.py -v -m integration
-```
+### Fixtures (`conftest.py`)
 
-### Integration Test Requirements
+| Fixture | Description |
+|---------|-------------|
+| `mongodb_mock` | Mock MongoDB with auto-creating collections |
+| `client` | FastAPI `TestClient` with mocked MongoDB + Celery |
+| `mock_get_database` | Patch `get_database()` for Celery service tests |
 
-Integration tests require real API credentials. Set these in your `.env`:
-
-```env
-# LLM Integration Tests
-OPENROUTER_API_KEY=sk-or-v1-...
-
-# MongoDB Integration Tests (uses MONGODB_URL from .env)
-MONGODB_URL=mongodb://localhost:27017
-MONGODB_DB_NAME=mobibox
-```
-
-Integration tests are automatically skipped if credentials are missing.
-
-### Test Output Examples
-
-#### Unit Test Output
-```
-src/test/test_archive_service.py::TestRecordsToParquet::test_empty_records PASSED
-src/test/test_archive_service.py::TestRecordsToParquet::test_simple_records PASSED
-src/test/test_archive_service.py::TestArchiveService::test_archive_table_success PASSED
-...
-21 passed in 0.20s
-```
-
-#### Integration Test Output
-```
-src/test/test_archive_storage_integration.py::TestStorageUpload::test_upload_small_parquet_to_tests_folder
-Parquet file size: 3397 bytes
-Successfully uploaded to: tests/imu/2026/03/test-2026-03-08-000210.parquet
-Verified file exists: test-2026-03-08-000210.parquet
-PASSED
-...
-7 passed in 3.00s
-```
-
-```bash
-# Test HAR processing for a user
-celery -A src.celery_app.celery_app call process_har_batch --args='["user1"]'
-
-# Test atomic activities for a user
-celery -A src.celery_app.celery_app call process_atomic_activities_batch --args='["user1"]'
-
-# Check active tasks
-celery -A src.celery_app.celery_app inspect active
-
-# Check registered tasks
-celery -A src.celery_app.celery_app inspect registered
-```
+---
 
 ## Project Structure
 
 ```
-MobiBox_server/
-├── environment.yml           # Conda environment configuration
-├── .env.example              # Example environment variables
-├── README.md                 # This file
-├── scripts/                  # Service management scripts
-│   ├── start_services.sh    # Start all services
-│   ├── stop_services.sh     # Stop all services
-│   ├── restart_services.sh  # Restart all services
-│   └── status.sh            # Check service status
-├── logs/                     # Service logs (created at runtime)
-│   ├── api.log              # FastAPI logs
-│   ├── celery_worker.log    # Celery worker logs
-│   └── celery_beat.log      # Celery beat logs
-├── docs/                     # Documentation
-│   └── TSFM_INTEGRATION.md  # TSFM model documentation
+MobiBox_Server/
+├── environment.yml
+├── .env.example
+├── pyproject.toml
+├── README.md
+├── scripts/
+│   ├── tmux_start.sh / tmux_stop.sh / tmux_attach.sh / tmux_status.sh
+│   ├── start_services.sh / stop_services.sh / restart_services.sh / status.sh
+│   ├── download_selfsup_model.py
+│   └── test_selfsup_model.py
+├── models/                     # Offline model cache (gitignored)
+├── logs/                       # Rotating log files
+├── archives/                   # Parquet archival output
+├── docs/
+│   └── mongodb-access.md
 ├── src/
-│   ├── __init__.py
-│   ├── main.py              # FastAPI application entry point
-│   ├── config.py            # Application configuration
-│   ├── database.py          # MongoDB client initialization (Motor + PyMongo)
-│   ├── register/            # User registration module
-│   │   ├── __init__.py
-│   │   ├── constants.py
-│   │   ├── routes.py        # Registration API routes
-│   │   ├── schemas.py       # Pydantic schemas
-│   │   └── service.py       # Business logic
-│   ├── upload/              # Data upload module
-│   │   ├── __init__.py
-│   │   ├── constants.py
-│   │   ├── routes.py        # Upload API routes
-│   │   ├── schemas.py       # Pydantic schemas
-│   │   └── service.py       # Business logic
-│   ├── celery_app/          # Celery tasks for async processing
-│   │   ├── __init__.py
-│   │   ├── celery_app.py    # Celery app instance
-│   │   ├── config.py        # Celery configuration
-│   │   ├── tasks/           # Celery task modules
-│   │   │   ├── har_tasks.py
-│   │   │   ├── atomic_tasks.py
-│   │   │   ├── summary_tasks.py
-│   │   │   └── archive_tasks.py    # Data archival tasks (new)
-│   │   ├── services/        # Business logic
-│   │   │   ├── har_service.py
-│   │   │   ├── atomic_service.py
-│   │   │   ├── summary_service.py
-│   │   │   ├── app_category_service.py  # App category lookup (new)
-│   │   │   ├── processing_state_service.py  # User state tracking (new)
-│   │   │   ├── archive_service.py     # Data archival service (new)
-│   │   │   ├── intervention_service.py
-│   │   │   ├── tsfm_service.py         # TSFM model wrapper
-│   │   │   └── tsfm_model/             # TSFM model code
-│   │   │       ├── __init__.py
-│   │   │       ├── config.py
-│   │   │       ├── encoder.py
-│   │   │       ├── semantic_alignment.py
-│   │   │       ├── token_text_encoder.py
-│   │   │       ├── feature_extractor.py
-│   │   │       ├── transformer.py
-│   │   │       ├── positional_encoding.py
-│   │   │       ├── preprocessing.py
-│   │   │       ├── label_groups.py
-│   │   │       ├── model_loading.py
-│   │   │       └── ckpts/              # Model checkpoints
-│   │   │           ├── best.pt
-│   │   │           └── hyperparameters.json
-│   │   ├── schemas/         # Pydantic schemas
-│   │   │   ├── har_schemas.py
-│   │   │   └── atomic_schemas.py
-│   │   └── README.md        # Celery documentation
-│   ├── llm_utils/           # LLM integration utilities
-│   │   └── services.py
-│   ├── services/             # External services (new)
-│   │   ├── __init__.py
-│   │   └── baidu_maps.py    # Baidu Maps API client
-│   ├── query/               # Query module for summary logs and interventions
-│   │   ├── __init__.py
-│   │   ├── constants.py
-│   │   ├── routes.py        # Query API routes
-│   │   ├── schemas.py       # Pydantic schemas
-│   │   └── service.py       # Business logic
-│   └── test/                # Test suite
-│       ├── __init__.py
-│       ├── conftest.py      # Pytest fixtures
-│       ├── test_upload.py   # Upload endpoint tests
-│       ├── test_llm_utils.py # LLM service tests (mocked)
-│       ├── test_llm_integration.py # LLM integration tests (real API)
-│       ├── test_celery_services.py # Celery service tests
-│       ├── test_celery_tasks.py # Celery task tests
-│       ├── test_archive_service.py # Archive service tests (mocked)
-│       ├── test_archive_service_integration.py # Archive integration tests
-│       ├── test_archive_storage_integration.py # Storage upload tests
-│       ├── test_query.py    # Query endpoint tests
-│       ├── test_tsfm.py     # TSFM model tests
-│       └── test_intervention_pipeline_integration.py # Intervention pipeline tests
+│   ├── main.py                 # FastAPI app entry point
+│   ├── config.py               # App settings (from .env)
+│   ├── database.py             # MongoDB (Motor async + PyMongo sync)
+│   ├── database_indexes.py     # Auto-created indexes + TTL
+│   ├── logging_config.py       # Rotating file handlers
+│   ├── register/               # POST /register
+│   ├── upload/                 # POST /upload/*
+│   ├── query/                  # POST /get_summary_log, /get_intervention, etc.
+│   ├── imu_test/               # POST /imu_test/predict, GET /statistics, /labels
+│   ├── llm_utils/              # OpenRouter LLM integration
+│   ├── services/               # Baidu Maps API client
+│   ├── celery_app/
+│   │   ├── celery_app.py       # Celery instance + beat schedule
+│   │   ├── config.py           # Model config, windows, thresholds
+│   │   ├── tasks/              # har_tasks, atomic_tasks, summary_tasks, archive_tasks
+│   │   ├── services/           # har_service, atomic_service, summary_service,
+│   │   │                       # intervention_service, archive_service,
+│   │   │                       # imu_selfsup_service, app_category_service,
+│   │   │                       # processing_state_service
+│   │   └── schemas/            # HAR + atomic activity Pydantic schemas
+│   └── test/                   # pytest test suite
 └── .gitignore
 ```
 
-## Installed Libraries
-
-| Library | Purpose |
-|---------|---------|
-| fastapi | Web framework for building APIs |
-| uvicorn | ASGI server |
-| pydantic | Data validation using Python type hints |
-| pydantic-settings | Settings management |
-| motor | Async MongoDB driver |
-| pymongo | Sync MongoDB driver (for PyTorch Dataset) |
-| celery | Distributed task queue |
-| celery-beat | Celery scheduler for periodic tasks |
-| langchain-openai | LLM integration via OpenRouter |
-| langchain-core | Core LangChain utilities |
-| langchain-text-splitters | Text chunking for summarization |
-| pytest | Testing framework |
-| pytest-asyncio | Async testing support |
-| python-dotenv | Environment variable management |
-| httpx | HTTP client for testing |
-| black | Code formatter |
-| isort | Import sorter |
-| flake8 | Style guide enforcement |
-| mypy | Static type checker |
-| pyarrow | Parquet file format for data archival |
-
-## Database Schema
-
-The application connects to MongoDB and uses the following collections:
-
-### users collection
-- `_id` (string, primary key) - Unique user identifier (same as `name`)
-- `name` (string) - User display name
-
-### uploads collection
-- `user` (string) - User identifier (indexed)
-- `timestamp` (datetime) - Record timestamp
-- `volume` (int) - Audio volume level (0-100)
-- `screen_on_ratio` (float) - Screen on time ratio (0.0-1.0)
-- `wifi_connected` (bool) - WiFi connection status
-- `wifi_ssid` (string) - WiFi network SSID
-- `network_traffic` (float) - Total network traffic in bytes
-- `Rx_traffic` (float) - Received traffic in bytes
-- `Tx_traffic` (float) - Transmitted traffic in bytes
-- `stepcount_sensor` (int) - Step count
-- `gpsLat` (float) - GPS latitude
-- `gpsLon` (float) - GPS longitude
-- `battery` (int) - Battery percentage (0-100)
-- `current_app` (string) - Current foreground app package name
-- `bluetooth_devices` (array of strings) - Array of Bluetooth device names
-- `address` (string) - Physical address
-- `poi` (array of strings) - Array of points of interest
-- `nearbyBluetoothCount` (int) - Count of nearby Bluetooth devices
-- `topBluetoothDevices` (array of strings) - Array of top Bluetooth device names
-
-### imu collection
-- `user` (string) - User identifier
-- `timestamp` (datetime) - Record timestamp
-- `acc_X`, `acc_Y`, `acc_Z` (float) - Accelerometer readings
-- `gyro_X`, `gyro_Y`, `gyro_Z` (float) - Gyroscope readings
-- `mag_X`, `mag_Y`, `mag_Z` (float) - Magnetometer readings
-
-### har collection
-- `user` (string) - User identifier
-- `timestamp` (datetime) - Record timestamp
-- `har_label` (string) - Activity label (walking, running, sitting, etc.)
-- `confidence` (float) - Confidence score (0-1)
-- `source` (string) - Source: 'tsfm_model', 'imu_model', 'mock_har', 'insufficient_data'
-
-### atomic_activities collection
-- `user` (string) - User identifier
-- `timestamp` (datetime) - Record timestamp
-- `har_label` (string) - HAR activity label
-- `app_category` (string) - App usage category
-- `app_name` (string) - Specific app package name (optional)
-- `step_count` (string) - Step activity label
-- `phone_usage` (string) - Phone usage pattern
-- `social` (string) - Social context label
-- `movement` (string) - Movement pattern label
-- `location` (string) - Location context (optional)
-
-### interventions collection
-- `user` (string) - User identifier
-- `intervention_content` (string) - Intervention message text
-- `start_timestamp` (datetime) - Window start time
-- `end_timestamp` (datetime) - Window end time
-- `timestamp` (datetime) - Generation timestamp
-
-### summary_logs collection
-- `user` (string) - User identifier
-- `log_type` (string) - hourly or daily
-- `summary` (string) - Full summary text (title + narrative + highlights + recommendations)
-- `start_timestamp` (datetime) - Window start time
-- `end_timestamp` (datetime) - Window end time
-- `timestamp` (datetime) - Generation timestamp
-
-### app_categories collection
-- `app_name` (string, unique index) - App package name
-- `category` (string) - Category classification
-- `source` (string) - 'lookup' (predefined) or 'llm' (learned)
-- `created_at` (datetime) - Record timestamp
-
-### user_processing_state collection
-- `_id` (string, primary key) - User identifier
-- `last_har_timestamp` (datetime) - Last HAR processing time
-- `last_atomic_timestamp` (datetime) - Last atomic activity time
-- `last_upload_timestamp` (datetime) - Last data upload time
-- `data_collection_start` (datetime) - Data collection start time
-- `last_summary_generated` (datetime) - Last summary generation time
-- `updated_at` (datetime) - Record update time
-
-## Celery Tasks
-
-The system uses Celery for asynchronous processing of sensor data and generating health interventions.
-
-### Task Pipelines
-
-| Pipeline | Trigger | Description |
-|----------|---------|-------------|
-| **HAR Processing** | IMU data upload | Classify human activity from sensor data |
-| **Atomic Activities** | Document upload | Generate 7-dimensional activity labels |
-| **Interventions** | Scheduled (every 20 min) | LLM-generated health suggestions |
-| **Summaries** | Scheduled (every 20 min + daily) | Activity summary logs |
-
-### Quick Reference
-
-```bash
-# Start Celery worker
-celery -A src.celery_app.celery_app worker --loglevel=info
-
-# Start Celery beat scheduler
-celery -A src.celery_app.celery_app beat --loglevel=info
-
-# Manual task execution
-celery -A src.celery_app.celery_app call process_har_batch --args='["user1"]'
-```
-
-For detailed Celery documentation, see [src/celery_app/README.md](src/celery_app/README.md).
-
-## TSFM Model Integration
-
-The backend uses a TSFM (Time Series Foundation Model) for Human Activity Recognition (HAR). The model is a semantic-aligned encoder trained on UCI-HAR dataset with zero-shot capability.
-
-### Model Details
-
-| Property | Value |
-|----------|-------|
-| Architecture | Semantic-aligned encoder with contrastive learning |
-| Training Data | UCI-HAR dataset (6 activities) |
-| Input | 9-channel IMU data (accelerometer, gyroscope, magnetometer) |
-| Labels | walking, walking_upstairs, walking_downstairs, sitting, standing, laying |
-| Checkpoint | `src/celery_app/services/tsfm_model/ckpts/best.pt` |
-
-### Label Mapping
-
-TSFM labels are mapped to MobiBox activity labels:
-
-| TSFM Label | MobiBox Label |
-|------------|---------------|
-| walking | walking |
-| walking_upstairs | climbing stairs |
-| walking_downstairs | climbing stairs |
-| sitting | sitting |
-| standing | standing |
-| laying | lying |
-
-### Setup
-
-1. **Model checkpoint** — The TSFM model checkpoint (`best.pt`) and hyperparameters are expected in:
-   ```
-   src/celery_app/services/tsfm_model/ckpts/
-   ```
-   TSFM is optional; the system falls back to the legacy IMU transformer model or a mock HAR model when the checkpoint is absent.
-
-2. **Verify the model loads correctly**:
-   ```bash
-   python -c "from src.celery_app.services.tsfm_service import _get_tsfm_model; model, _, available = _get_tsfm_model(); print(f'TSFM available: {available}')"
-   ```
-
-### Testing
-
-Run TSFM-specific tests:
-```bash
-# Run all TSFM tests
-pytest src/test/test_tsfm.py -v
-
-# Run specific test categories
-pytest src/test/test_tsfm.py::TestTSFMPreprocessing -v
-pytest src/test/test_tsfm.py::TestTSFMLabelMapping -v
-pytest src/test/test_tsfm.py::TestTSFMInference -v
-pytest src/test/test_tsfm.py::TestTSFMBatchInference -v
-```
-
-### Inference Flow
-
-```
-IMU Data (N samples × 9 channels)
-        ↓
-    Preprocessing
-  (patching, normalization)
-        ↓
-    TSFM Encoder
-  (semantic embeddings)
-        ↓
-  Cosine Similarity
-  (with label embeddings)
-        ↓
-    Activity Label
-```
-
-For detailed TSFM documentation, see [docs/TSFM_INTEGRATION.md](docs/TSFM_INTEGRATION.md).
-
-## LLM Integration
-
-The backend uses OpenRouter API for LLM-powered features like health interventions and activity summaries. OpenRouter provides an OpenAI-compatible API with access to many models including free tiers.
-
-### Supported Models
-
-| Model | Type | Use Case |
-|-------|------|----------|
-| `qwen/qwen3.5-flash-02-23` | Free | Recommended — fast, reliable structured output |
-| `meta-llama/llama-3.2-3b-instruct:free` | Free | Fast responses |
-| `google/gemma-2-9b-it:free` | Free | General purpose |
-| `mistralai/mistral-7b-instruct:free` | Free | Balanced |
-
-See [OpenRouter Models](https://openrouter.ai/models) for all available models.
-
-### Configuration
-
-```env
-# Required
-OPENROUTER_API_KEY=sk-or-...
-
-# Optional (defaults shown)
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=qwen/qwen3.5-flash-02-23
-DEFAULT_TEMPERATURE=0.1
-```
-
-### LLM Service Functions
-
-The `src/llm_utils/services.py` module provides:
-
-| Function | Description |
-|----------|-------------|
-| `get_llm()` | Create configured ChatOpenAI instance |
-| `query_llm()` | Simple text generation |
-| `generate_structured_output()` | Pydantic schema-based output |
-| `summarize_long_text()` | Chunked summarization for long content |
-
-### Rate Limiting
-
-Built-in rate limiting ensures API quotas are respected:
-- Default: 60 requests per minute
-- Configured in `RateLimiter` class
-
-### Usage Example
-
-```python
-from src.llm_utils.services import generate_structured_output
-from pydantic import BaseModel
-
-class Intervention(BaseModel):
-    message: str
-    priority: str
-
-result = await generate_structured_output(
-    system_prompt="You are a health advisor.",
-    user_prompt="Suggest an intervention for a sedentary user.",
-    output_schema=Intervention,
-    temperature=0.3,
-)
-print(result.message)
-```
-
-### Testing
-
-```bash
-# Run LLM unit tests (mocked)
-pytest src/test/test_llm_utils.py -v
-
-# Run LLM integration tests (requires OPENROUTER_API_KEY)
-pytest src/test/test_llm_integration.py -v -m integration
-```
-
-## Feature Implementation Details
-
-This section documents the key features implemented in the MobiBox backend.
-
-### 1. App Category Table Lookup
-
-**Purpose:** Reduce LLM API calls for app classification by using a cached lookup table.
-
-**Files:**
-- `src/celery_app/services/app_category_service.py` - App category lookup service
-- `src/celery_app/services/atomic_service.py` - Integration point
-
-**How it works:**
-1. In-memory cache with 70+ predefined common apps
-2. Database cache (`app_categories` table) for learned classifications
-3. LLM fallback for unknown apps
-4. Results cached in database for future use
-
-**Categories:**
-- social communication app
-- video and music app
-- games or gaming platform
-- e-commerce/shopping platform
-- office/working app
-- learning and education app
-- health management/self-discipline app
-- financial services app
-- news/reading app
-- tool/engineering/functional app
-- uncertain
-
 ---
 
-### 2. Last Processed Timestamp Tracking
+## Data Archival
 
-**Purpose:** Enable incremental data processing to avoid reprocessing the same data.
-
-**Files:**
-- `src/celery_app/services/processing_state_service.py` - State tracking service
-
-**Database Table:** `user_processing_state`
-
-| Column | Description |
-|--------|-------------|
-| user | User identifier (primary key) |
-| last_har_timestamp | Last HAR processing timestamp |
-| last_atomic_timestamp | Last atomic activity timestamp |
-| last_upload_timestamp | Last data upload timestamp |
-| data_collection_start | When user started collecting data |
-| last_summary_generated | Last summary log timestamp |
-
----
-
-### 3. Hourly Log Threshold Check
-
-**Purpose:** Only generate summary logs when sufficient data is available.
-
-**Configuration** (`src/celery_app/config.py`):
-```python
-MIN_ATOMIC_RECORDS_FOR_HOURLY_LOG = 60  # At least 60 records
-MIN_UNIQUE_LABELS_FOR_LOG = 3  # At least 3 unique activity types
-```
-
-**Function:** `should_generate_summary()` in `summary_service.py`
-
----
-
-### 4. Per-User Hourly Timer
-
-**Purpose:** Generate logs based on user's data accumulation, not fixed schedule.
-
-**Configuration:**
-```python
-MIN_DATA_COLLECTION_HOURS = 1  # Minimum 1 hour of data
-MIN_HOURS_BETWEEN_SUMMARIES = 1  # Minimum 1 hour between logs
-```
-
-**Function:** `check_user_hourly_ready()` in `summary_service.py`
-
-**Flow:**
-1. User starts collecting data → `data_collection_start` is set
-2. Wait until user has 1+ hour of data
-3. Wait until at least 1 hour since last summary
-4. Check data threshold requirements
-5. Generate and store summary
-
----
-
-### 5. Mobile Polling Mechanism
-
-**Purpose:** Allow mobile app to efficiently detect new logs via polling.
-
-**API Changes:**
-
-**Request:**
-```json
-POST /get_summary_log
-{
-  "user": "username",
-  "log_type": "hourly",
-  "last_log_id": "507f1f77bcf86cd799439011"  // Optional: MongoDB ObjectId of last received log
-}
-```
-
-**Response:**
-```json
-{
-  "status": "success",
-  "data": { ... },  // Null if no new log
-  "has_new_log": true  // False if last_log_id matches latest
-}
-```
-
-**Usage:**
-1. Mobile calls `/get_summary_log` without `last_log_id` to get initial log
-2. Mobile stores `data.id` as `last_log_id`
-3. Mobile polls with `last_log_id` to check for new logs
-4. If `has_new_log` is `false`, no new data to download
-
----
-
-### 6. Baidu Map API Integration
-
-**Purpose:** Enrich GPS coordinates with location names via reverse geocoding.
-
-**Files:**
-- `src/services/baidu_maps.py` - Baidu Maps API client
-- `src/config.py` - Configuration settings
-
-**Configuration:**
-```env
-BAIDU_MAPS_API_KEY=your-api-key
-BAIDU_MAPS_ENABLED=true
-```
-
-**Features:**
-- Reverse geocoding (GPS → address, POI, city, district)
-- 1-hour cache to minimize API calls
-- Automatic fallback to provided address/POI if API fails
-
-**Response fields:**
-- `address` - Formatted address
-- `poi` - List of nearby POIs
-- `city` - City name
-- `district` - District name
-- `business` - Business area
-
----
-
-## Database Indexes
-
-Indexes are created automatically at application startup via `database_indexes.py` (idempotent).
-
-Key indexes for performance:
-
-| Collection | Index | Purpose |
-|-----------|-------|---------|
-| `atomic_activities` | `(user, timestamp)` | User activity queries |
-| `har` | `(user, timestamp)` | HAR label queries |
-| `summary_logs` | `(user, log_type, timestamp)` | Summary polling |
-| `imu` | `(user, timestamp)` | IMU data queries |
-| `app_categories` | `(app_name)` | App category lookup (unique) |
-| `users` | `(_id)` | User lookup (unique) |
-| `user_processing_state` | `(_id)` | State lookup (unique) |
-
-TTL (Time-To-Live) indexes automatically expire old data:
-| Collection | TTL | Retention |
-|-----------|-----|-----------|
-| `imu` | 7 days | Highest volume sensor data |
-| `har` | 30 days | Derived from IMU |
-| `atomic_activities` | 30 days | Activity summaries |
-| `uploads` | 30 days | Document uploads |
-| `summary_logs` | 90 days | Important user summaries |
-| `interventions` | 90 days | Health interventions |
-
-## Data Archival System
-
-The system automatically archives old data to local Parquet files to reduce database size. Archived data is stored in **Parquet format with Snappy compression**, achieving **10-100x compression** compared to CSV.
-
-### Overview
-
-| Component | Purpose |
-|------------|---------|
-| Archive Service | Exports old records to Parquet files |
-| Celery Beat | Schedules daily archival at 3 AM |
-| Local Filesystem | Holds archived Parquet files |
-| Archival Logs | Audit trail of all archival operations |
-
-### Storage Format
-
-Archives are stored locally as Parquet files with Snappy compression:
+Old records are exported to compressed Parquet files (Snappy) and deleted from
+MongoDB. Runs daily at 3 AM.
 
 ```
 ./archives/
-├── imu/
-│   └── 2026/
-│       └── 03/
-│           └── 2026-03-01.parquet
-├── har/
-│   └── 2026/
-│       └── 03/
-│           └── 2026-03-01.parquet
-└── atomic_activities/
-    └── ...
+├── imu/2026/03/2026-03-01.parquet
+├── har/2026/03/2026-03-01.parquet
+└── ...
 ```
 
-**Benefits of Parquet:**
-- **2-10x smaller** than CSV (columnar + Snappy compression + dictionary encoding)
-- **Type preservation** (timestamps, numbers remain typed)
-- **Query optimization** (built-in statistics)
-- **Industry standard** for data lakes and analytics
-
-### Configuration
-
-Add to `.env`:
+Configuration:
 
 ```env
-# Archival settings
 ARCHIVE_DIR=./archives
 ARCHIVE_ENABLED=true
 ARCHIVE_BATCH_SIZE=10000
 ```
 
-### Manual Archival
-
-Trigger archival manually:
-
-```bash
-# Archive all tables
-celery -A src.celery_app.celery_app call archive_data_periodic
-
-# Check archive statistics
-celery -A src.celery_app.celery_app call get_archive_stats
-```
-
-### Monitoring
-
-Archived file storage is managed locally. Check `ARCHIVE_DIR` for output files and `logs/` for archival logs.
-
-### Restoring Data
-
-To restore archived data, read Parquet files with `pandas`:
-
-```python
-import pandas as pd
-
-# Read archived Parquet
-df = pd.read_parquet('./archives/imu/2026/03/2026-03-01.parquet')
-
-# Re-insert to MongoDB as needed
-# ...
-```
-
 ---
 
-## Service Management Scripts
+## Feature Details
 
-The `scripts/` directory contains utilities for managing services:
+### App Category Lookup
+`src/celery_app/services/app_category_service.py` — 70+ predefined apps in
+memory + DB cache (`app_categories`). LLM fallback for unknown apps.
 
-| Script | Description |
-|--------|-------------|
-| `start_services.sh` | Start all services (RabbitMQ, FastAPI, Celery worker/beat) |
-| `stop_services.sh` | Stop all running services |
-| `restart_services.sh` | Restart all services |
-| `status.sh` | Check status of all services |
+### Incremental Processing
+`src/celery_app/services/processing_state_service.py` — per-user timestamps
+in `user_processing_state` collection prevent re-processing the same data.
 
-### Usage
+### Summary Gating
+Summaries are generated only when thresholds are met (≥60 atomic records,
+≥3 unique activity types, ≥1 hour of data).
 
-```bash
-# Start all services
-./scripts/start_services.sh
+### Mobile Polling
+`POST /get_summary_log` supports `last_log_id` polling — returns
+`has_new_log: false` when the latest log matches, avoiding redundant transfers.
 
-# Check service status
-./scripts/status.sh
-
-# Stop all services (will prompt to stop RabbitMQ)
-./scripts/stop_services.sh
-
-# Restart all services
-./scripts/restart_services.sh
-```
-
-### Logs
-
-Service logs are stored in the `logs/` directory:
-- `logs/api.log` - FastAPI server logs
-- `logs/celery_worker.log` - Celery worker logs
-- `logs/celery_beat.log` - Celery beat scheduler logs
-
-```bash
-# View API logs
-tail -f logs/api.log
-
-# View Celery worker logs
-tail -f logs/celery_worker.log
-```
+### Baidu Maps Integration
+`src/services/baidu_maps.py` — reverse geocoding with 1-hour cache.
+Falls back to provided address/POI data when API is unavailable.
