@@ -1,6 +1,8 @@
 # MobiBox Backend
 
-A FastAPI-based backend server for MobiBox with MongoDB integration, Celery task processing, and LLM-powered health interventions.
+A FastAPI-based backend server for MobiBox with MongoDB, Celery task processing, and LLM-powered health interventions.
+
+> **Note:** The backend was migrated from Supabase (PostgreSQL) to MongoDB in July 2025. All data is stored in MongoDB collections with TTL indexes for automatic retention management. The test suite uses MongoDB mocks — see [Testing](#testing) for details.
 
 ## Quick Start
 
@@ -63,7 +65,7 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 
 # Terminal 2: Celery Worker (for async tasks)
 conda activate Mobibox_backend
-celery -A src.celery_app.celery_app worker --loglevel=info
+celery -A src.celery_app.celery_app worker --loglevel=info -Q default,har,atomic,summary,archive
 
 # Terminal 3: Celery Beat (for scheduled tasks - optional)
 conda activate Mobibox_backend
@@ -110,12 +112,12 @@ MONGODB_DB_NAME=mobibox
 ```env
 OPENROUTER_API_KEY=your-api-key-here
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=qwen/qwen3-vl-30b-a3b-thinking
+OPENROUTER_MODEL=qwen/qwen3.5-flash-02-23
 DEFAULT_TEMPERATURE=0.1
 ```
 
 **Free Models Available:**
-- `qwen/qwen3-vl-30b-a3b-thinking` (recommended)
+- `qwen/qwen3.5-flash-02-23` (recommended — fast, free)
 - `meta-llama/llama-3.2-3b-instruct:free`
 - `google/gemma-2-9b-it:free`
 - `mistralai/mistral-7b-instruct:free`
@@ -361,7 +363,8 @@ pkill -f "uvicorn\|celery"
 ```bash
 # Check API is running
 curl http://localhost:8000/health
-# Expected: {"status": "healthy"}
+# Expected with MongoDB: {"status": "healthy", "mongodb": "up"}
+# Without MongoDB: {"status": "unhealthy", "mongodb": "down"} (server still runs)
 
 # Check MongoDB connection
 curl http://localhost:8000/mongodb-test
@@ -478,7 +481,7 @@ celery -A src.celery_app.celery_app inspect registered
   ```json
   {
     "user": "username",
-    "intervention_id": 123,
+    "intervention_id": "507f1f77bcf86cd799439011",
     "feedback": "This intervention was helpful",
     "mc1": "Strongly agree",
     "mc2": "Agree",
@@ -492,8 +495,8 @@ celery -A src.celery_app.celery_app inspect registered
 - `POST /send_log_feedback` - Submit feedback for a summary log
   ```json
   {
-    "user": 123,
-    "summary_logs_id": 456,
+    "user": "username",
+    "summary_logs_id": "507f1f77bcf86cd799439011",
     "feedback": "The summary was accurate"
   }
   ```
@@ -505,8 +508,12 @@ celery -A src.celery_app.celery_app inspect registered
 ```bash
 conda activate Mobibox_backend
 
-# Run all tests
-pytest
+# Run all unit tests (131 tests, < 2 seconds)
+pytest src/test/ -v \
+  --ignore=src/test/test_llm_integration.py \
+  --ignore=src/test/test_archive_service_integration.py \
+  --ignore=src/test/test_archive_storage_integration.py \
+  --ignore=src/test/test_intervention_pipeline_integration.py
 
 # Run with verbose output
 pytest -v
@@ -516,9 +523,6 @@ pytest src/test/test_celery_services.py
 
 # Run specific test class
 pytest src/test/test_celery_services.py::TestSummaryService -v
-
-# Run with coverage
-pytest --cov=src --cov-report=html
 ```
 
 ### Test Categories
@@ -563,11 +567,9 @@ The `conftest.py` file provides common fixtures:
 
 | Fixture | Description |
 |---------|-------------|
-| `mock_mongo_client` | Mocked MongoDB client for unit tests |
-| `client` | FastAPI test client with mocked MongoDB |
-| `mock_rate_limiter` | Mocked rate limiter for LLM tests |
-| `mock_llm_settings` | Mocked LLM settings for unit tests |
-| `mock_chat_openai` | Mocked ChatOpenAI for LLM tests |
+| `mongodb_mock` | Mock MongoDB database with auto-creating collection mocks |
+| `client` | FastAPI test client with mocked MongoDB and Celery |
+| `mock_get_database` | Patch `get_database()` for non-HTTP Celery service tests |
 
 ### Running Specific Test Categories
 
@@ -816,28 +818,27 @@ The application connects to MongoDB and uses the following collections:
 - `timestamp` (datetime) - Record timestamp
 - `har_label` (string) - HAR activity label
 - `app_category` (string) - App usage category
-- `step_label` (string) - Step activity label
+- `app_name` (string) - Specific app package name (optional)
+- `step_count` (string) - Step activity label
 - `phone_usage` (string) - Phone usage pattern
-- `social_label` (string) - Social context label
-- `movement_label` (string) - Movement pattern label
-- `location_label` (string) - Location context
+- `social` (string) - Social context label
+- `movement` (string) - Movement pattern label
+- `location` (string) - Location context (optional)
 
 ### interventions collection
 - `user` (string) - User identifier
-- `intervention_type` (string) - Type of intervention
-- `message` (string) - Intervention message
-- `priority` (string) - Priority (low/medium/high)
-- `category` (string) - Category
-- `timestamp` (datetime) - Record timestamp
+- `intervention_content` (string) - Intervention message text
+- `start_timestamp` (datetime) - Window start time
+- `end_timestamp` (datetime) - Window end time
+- `timestamp` (datetime) - Generation timestamp
 
 ### summary_logs collection
 - `user` (string) - User identifier
 - `log_type` (string) - hourly or daily
-- `title` (string) - Summary title
-- `summary` (string) - Summary narrative
-- `highlights` (object) - Key highlights
-- `recommendations` (object) - Recommendations
-- `timestamp` (datetime) - Record timestamp
+- `summary` (string) - Full summary text (title + narrative + highlights + recommendations)
+- `start_timestamp` (datetime) - Window start time
+- `end_timestamp` (datetime) - Window end time
+- `timestamp` (datetime) - Generation timestamp
 
 ### app_categories collection
 - `app_name` (string, unique index) - App package name
@@ -911,15 +912,11 @@ TSFM labels are mapped to MobiBox activity labels:
 
 ### Setup
 
-1. **Download the checkpoint** from remote server:
-   ```bash
-   # Create checkpoint directory
-   mkdir -p src/celery_app/services/tsfm_model/ckpts
-
-   # Download checkpoint and hyperparameters
-   scp user@server:/path/to/best.pt src/celery_app/services/tsfm_model/ckpts/
-   scp user@server:/path/to/hyperparameters.json src/celery_app/services/tsfm_model/ckpts/
+1. **Model checkpoint** — The TSFM model checkpoint (`best.pt`) and hyperparameters are expected in:
    ```
+   src/celery_app/services/tsfm_model/ckpts/
+   ```
+   TSFM is optional; the system falls back to the legacy IMU transformer model or a mock HAR model when the checkpoint is absent.
 
 2. **Verify the model loads correctly**:
    ```bash
@@ -967,7 +964,7 @@ The backend uses OpenRouter API for LLM-powered features like health interventio
 
 | Model | Type | Use Case |
 |-------|------|----------|
-| `qwen/qwen3-vl-30b-a3b-thinking` | Free | Recommended for structured output |
+| `qwen/qwen3.5-flash-02-23` | Free | Recommended — fast, reliable structured output |
 | `meta-llama/llama-3.2-3b-instruct:free` | Free | Fast responses |
 | `google/gemma-2-9b-it:free` | Free | General purpose |
 | `mistralai/mistral-7b-instruct:free` | Free | Balanced |
@@ -982,7 +979,7 @@ OPENROUTER_API_KEY=sk-or-...
 
 # Optional (defaults shown)
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=qwen/qwen3-vl-30b-a3b-thinking
+OPENROUTER_MODEL=qwen/qwen3.5-flash-02-23
 DEFAULT_TEMPERATURE=0.1
 ```
 
@@ -1132,7 +1129,7 @@ POST /get_summary_log
 {
   "user": "username",
   "log_type": "hourly",
-  "last_log_id": 123  // Optional: ID of last received log
+  "last_log_id": "507f1f77bcf86cd799439011"  // Optional: MongoDB ObjectId of last received log
 }
 ```
 
@@ -1181,87 +1178,9 @@ BAIDU_MAPS_ENABLED=true
 
 ---
 
-## Database Indexes (Automatic)
-
-Indexes are created automatically at application startup by `database_indexes.py`. No manual migration steps are needed — all indexes (including TTL-based expiration) are ensured idempotently when the server starts.
-
-See the [Database Indexes](#database-indexes) section above for the complete list.
-
----
-
-## Database Schema Reference
-
-### Core Tables
-
-#### `har` Table
-Human Activity Recognition labels from IMU sensor data.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | bigint | Auto-generated primary key |
-| `timestamp` | timestamptz | When the activity was detected |
-| `user` | varchar | User identifier (FK to user.name) |
-| `har_label` | enum | Activity label (walking, running, sitting, etc.) |
-| `confidence` | real | Model confidence score (0.0-1.0) |
-| `source` | varchar | Source: 'tsfm_model', 'imu_model', 'mock_har', 'insufficient_data' |
-
-#### `atomic_activities` Table
-7-dimensional atomic activity labels.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | bigint | Auto-generated primary key |
-| `timestamp` | timestamptz | When the activity was generated |
-| `user` | varchar | User identifier (FK to user.name) |
-| `har_label` | enum | HAR activity label |
-| `app_category` | enum | App usage category |
-| `app_name` | varchar | Specific app package name (new) |
-| `step_count` | enum | Step activity label |
-| `phone_usage` | enum | Phone usage pattern |
-| `social` | enum | Social context label |
-| `movement` | enum | Movement pattern label |
-| `location` | varchar | Location context |
-
-#### `summary_logs` Table
-Hourly and daily activity summaries.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | bigint | Auto-generated primary key (used for polling) |
-| `timestamp` | timestamptz | When the summary was generated |
-| `user` | varchar | User identifier |
-| `log_type` | enum | 'hourly' or 'daily' |
-| `summary` | text | Summary content |
-| `start_timestamp` | timestamptz | Window start time |
-| `end_timestamp` | timestamptz | Window end time |
-
-#### `app_categories` Table
-Cache for app category classifications.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | serial | Primary key |
-| `app_name` | text | App package name (unique) |
-| `category` | text | Category classification |
-| `source` | text | 'lookup' or 'llm' |
-| `created_at` | timestamptz | When cached |
-
-#### `user_processing_state` Table
-Per-user processing timestamps for incremental processing.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `user` | text | User identifier (PK, FK to user.name) |
-| `last_har_timestamp` | timestamptz | Last HAR processing time |
-| `last_atomic_timestamp` | timestamptz | Last atomic activity time |
-| `last_upload_timestamp` | timestamptz | Last data upload time |
-| `data_collection_start` | timestamptz | When user started collecting data |
-| `last_summary_generated` | timestamptz | Last summary generation time |
-| `updated_at` | timestamptz | Auto-updated timestamp |
-
 ## Database Indexes
 
-Indexes are created automatically at application startup via `database_indexes.py` (idempotent). This replaces the old SQL migration system.
+Indexes are created automatically at application startup via `database_indexes.py` (idempotent).
 
 Key indexes for performance:
 

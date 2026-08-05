@@ -11,13 +11,13 @@ from src.celery_app.services.archive_service import (
     ArchiveService,
     run_archival,
     _records_to_parquet,
-    IMU_TABLE,
-    HAR_TABLE,
-    ATOMIC_ACTIVITIES_TABLE,
-    UPLOADS_TABLE,
-    SUMMARY_LOGS_TABLE,
-    INTERVENTIONS_TABLE,
-    ARCHIVAL_LOGS_TABLE,
+    IMU_COLLECTION,
+    HAR_COLLECTION,
+    ATOMIC_ACTIVITIES_COLLECTION,
+    UPLOADS_COLLECTION,
+    SUMMARY_LOGS_COLLECTION,
+    INTERVENTIONS_COLLECTION,
+    ARCHIVAL_LOGS_COLLECTION,
     CHINA_TZ,
 )
 
@@ -94,69 +94,57 @@ class TestArchiveService:
     def test_get_storage_path(self, mock_settings, mock_client):
         """Test storage path generation."""
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
-            service = ArchiveService(client=mock_client)
+            service = ArchiveService()
 
             date = datetime(2026, 3, 7, 12, 0, 0)
             path = service._get_storage_path("imu", date)
 
-            assert path == "archives/imu/2026/03/2026-03-07.parquet"
+            assert path == "imu/2026/03/2026-03-07.parquet"
 
     def test_get_storage_path_different_tables(self, mock_settings, mock_client):
         """Test storage path for different tables."""
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
-            service = ArchiveService(client=mock_client)
+            service = ArchiveService()
 
             date = datetime(2026, 1, 15, 10, 30, 0)
 
-            assert service._get_storage_path("har", date) == "archives/har/2026/01/2026-01-15.parquet"
-            assert service._get_storage_path("atomic_activities", date) == "archives/atomic_activities/2026/01/2026-01-15.parquet"
+            assert service._get_storage_path("har", date) == "har/2026/01/2026-01-15.parquet"
+            assert service._get_storage_path("atomic_activities", date) == "atomic_activities/2026/01/2026-01-15.parquet"
 
     @pytest.mark.asyncio
-    async def test_fetch_records_for_archival(self, mock_settings, mock_client):
+    async def test_fetch_records_for_archival(self, mock_settings, mock_get_database, mongodb_mock):
         """Test fetching records for archival."""
-        mock_response = MagicMock()
-        mock_response.data = [
+        mongodb_mock["imu"]._data = [
             {"id": 1, "timestamp": "2026-03-01T10:00:00Z", "data": "test1"},
             {"id": 2, "timestamp": "2026-03-01T11:00:00Z", "data": "test2"},
         ]
 
-        # Mock asyncio.to_thread to return the response directly
-        async def mock_to_thread(func, *args, **kwargs):
-            return mock_response
-
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
-            with patch("asyncio.to_thread", side_effect=mock_to_thread):
-                service = ArchiveService(client=mock_client)
+            service = ArchiveService()
 
-                records = await service.fetch_records_for_archival(
-                    table_name="imu",
-                    retention_days=7,
-                    batch_size=100,
-                )
+            records = await service.fetch_records_for_archival(
+                collection_name="imu",
+                retention_days=7,
+                batch_size=100,
+            )
 
-                assert len(records) == 2
+            assert len(records) == 2
 
     @pytest.mark.asyncio
-    async def test_fetch_records_empty(self, mock_settings, mock_client):
+    async def test_fetch_records_empty(self, mock_settings, mock_get_database, mongodb_mock):
         """Test fetching records when no records to archive."""
-        mock_response = MagicMock()
-        mock_response.data = []
-
-        # Mock asyncio.to_thread to return the response directly
-        async def mock_to_thread(func, *args, **kwargs):
-            return mock_response
+        mongodb_mock["imu"]._data = []
 
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
-            with patch("asyncio.to_thread", side_effect=mock_to_thread):
-                service = ArchiveService(client=mock_client)
+            service = ArchiveService()
 
-                records = await service.fetch_records_for_archival(
-                    table_name="imu",
-                    retention_days=7,
-                    batch_size=100,
-                )
+            records = await service.fetch_records_for_archival(
+                collection_name="imu",
+                retention_days=7,
+                batch_size=100,
+            )
 
-                assert len(records) == 0
+            assert len(records) == 0
 
     @pytest.mark.asyncio
     async def test_archive_table_disabled(self, mock_settings, mock_client):
@@ -164,10 +152,10 @@ class TestArchiveService:
         mock_settings.archive_enabled = False
 
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
-            service = ArchiveService(client=mock_client)
+            service = ArchiveService()
 
-            result = await service.archive_table(
-                table_name="imu",
+            result = await service.archive_collection(
+                collection_name="imu",
                 retention_days=7,
                 batch_size=100,
             )
@@ -180,14 +168,14 @@ class TestArchiveService:
         """Test archive_table when no records need archiving."""
         # Mock fetch_records_for_archival to return empty
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
-            service = ArchiveService(client=mock_client)
+            service = ArchiveService()
             service.fetch_records_for_archival = AsyncMock(return_value=[])
 
             # Mock log_archival_operation
             service.log_archival_operation = AsyncMock()
 
-            result = await service.archive_table(
-                table_name="imu",
+            result = await service.archive_collection(
+                collection_name="imu",
                 retention_days=7,
                 batch_size=100,
             )
@@ -205,7 +193,7 @@ class TestArchiveService:
         ]
 
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
-            service = ArchiveService(client=mock_client)
+            service = ArchiveService()
 
             # Mock methods
             service.fetch_records_for_archival = AsyncMock(return_value=records)
@@ -213,8 +201,8 @@ class TestArchiveService:
             service.delete_archived_records = AsyncMock(return_value=2)
             service.log_archival_operation = AsyncMock()
 
-            result = await service.archive_table(
-                table_name="imu",
+            result = await service.archive_collection(
+                collection_name="imu",
                 retention_days=7,
                 batch_size=100,
             )
@@ -240,7 +228,7 @@ class TestArchiveService:
 
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
             with patch("asyncio.to_thread", side_effect=mock_to_thread):
-                service = ArchiveService(client=mock_client)
+                service = ArchiveService()
 
                 # Mock methods
                 service.fetch_records_for_archival = AsyncMock(return_value=records)
@@ -248,8 +236,8 @@ class TestArchiveService:
                 service.log_archival_operation = AsyncMock()
                 service.delete_archived_records = AsyncMock(return_value=0)
 
-                result = await service.archive_table(
-                    table_name="imu",
+                result = await service.archive_collection(
+                collection_name="imu",
                     retention_days=7,
                     batch_size=100,
                 )
@@ -264,10 +252,10 @@ class TestArchiveService:
     async def test_archive_all_tables(self, mock_settings, mock_client):
         """Test archiving all configured tables."""
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
-            service = ArchiveService(client=mock_client)
+            service = ArchiveService()
 
             # Mock archive_table for each table
-            service.archive_table = AsyncMock(return_value={"archived": 10, "deleted": 10})
+            service.archive_collection = AsyncMock(return_value={"archived": 10, "deleted": 10})
 
             results = await service.archive_all_tables()
 
@@ -279,19 +267,15 @@ class TestArchiveService:
             assert "interventions" in results
 
             # Should be called 6 times (6 tables)
-            assert service.archive_table.call_count == 6
+            assert service.archive_collection.call_count == 6
 
     @pytest.mark.asyncio
-    async def test_log_archival_operation(self, mock_settings, mock_client):
+    async def test_log_archival_operation(self, mock_settings, mock_get_database, mongodb_mock):
         """Test logging archival operation."""
-        mock_response = MagicMock()
-        mock_response.data = [{"id": 1}]
-        mock_table = MagicMock()
-        mock_table.insert.return_value.execute = AsyncMock(return_value=mock_response)
-        mock_client.table.return_value = mock_table
+        coll = mongodb_mock[ARCHIVAL_LOGS_COLLECTION]
 
         with patch("src.celery_app.services.archive_service.get_settings", return_value=mock_settings):
-            service = ArchiveService(client=mock_client)
+            service = ArchiveService()
 
             await service.log_archival_operation(
                 table_name="imu",
@@ -302,8 +286,8 @@ class TestArchiveService:
                 status="completed",
             )
 
-            mock_client.table.assert_called_once_with(ARCHIVAL_LOGS_TABLE)
-            mock_table.insert.assert_called_once()
+            # Verify insert_one was called on the archival_logs collection
+            coll.insert_one.assert_called_once()
 
 
 class TestArchiveTasks:
@@ -343,35 +327,25 @@ class TestArchiveTasks:
         # Create a mock service instance
         mock_service = MagicMock()
         mock_service.settings.archive_batch_size = 100
-        mock_service.archive_table = AsyncMock(return_value={"archived": 50, "deleted": 50})
+        mock_service.archive_collection = AsyncMock(return_value={"archived": 50, "deleted": 50})
 
         # Patch ArchiveService at its source module
         with patch("src.celery_app.services.archive_service.ArchiveService", return_value=mock_service):
             result = archive_table_manual("imu", 7)
 
             assert result["archived"] == 50
-            mock_service.archive_table.assert_called_once_with(
-                table_name="imu",
+            mock_service.archive_collection.assert_called_once_with(
+                collection_name="imu",
                 retention_days=7,
                 batch_size=100,
             )
 
-    def test_get_archive_stats_task(self):
+    def test_get_archive_stats_task(self, mock_get_database, mongodb_mock):
         """Test get_archive_stats Celery task."""
         from src.celery_app.tasks.archive_tasks import get_archive_stats
 
-        # Mock Supabase client
-        mock_response = MagicMock()
-        mock_response.data = [{"id": 1}, {"id": 2}, {"id": 3}]
-        mock_response.count = 3
-
-        mock_table = MagicMock()
-        mock_table.select.return_value = mock_table
-        mock_table.lt.return_value = mock_table
-        mock_table.execute = Mock(return_value=mock_response)
-
-        mock_client = MagicMock()
-        mock_client.table.return_value = mock_table
+        # The task uses MongoDB count_documents on each collection
+        # Our mongodb_mock collections already have count_documents returning len(_data)
 
         # Mock settings
         mock_settings = MagicMock()
@@ -382,13 +356,11 @@ class TestArchiveTasks:
         mock_settings.retention_summary_logs_days = 90
         mock_settings.retention_interventions_days = 90
 
-        # Patch at source modules
-        with patch("src.database.get_supabase_client", return_value=mock_client):
-            with patch("src.config.get_settings", return_value=mock_settings):
-                result = get_archive_stats()
+        with patch("src.config.get_settings", return_value=mock_settings):
+            result = get_archive_stats()
 
-                assert "imu" in result
-                assert "har" in result
+            assert "imu" in result
+            assert "har" in result
 
 
 class TestRunArchival:
